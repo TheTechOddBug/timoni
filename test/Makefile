@@ -44,8 +44,11 @@ fleet-deploy: # Deploy the apps bundle across the fleet using the locally built 
 	-r $(REPOSITORY_ROOT)/test/manifests/runtime.cue
 
 .PHONY: fleet-deploy-check
-fleet-deploy-check: # Check the status of the apps bundle across the fleet using the locally built timoni
+fleet-deploy-check: # Check the status and drift of the apps bundle across the fleet using the locally built timoni
 	$(REPOSITORY_ROOT)/bin/timoni bundle status \
+	-f $(REPOSITORY_ROOT)/test/manifests/apps.cue \
+	-r $(REPOSITORY_ROOT)/test/manifests/runtime.cue
+	$(REPOSITORY_ROOT)/bin/timoni bundle apply --diff \
 	-f $(REPOSITORY_ROOT)/test/manifests/apps.cue \
 	-r $(REPOSITORY_ROOT)/test/manifests/runtime.cue
 
