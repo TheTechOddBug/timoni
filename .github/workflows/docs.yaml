@@ -25,6 +25,30 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - name: Resolve Timoni version
+        id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version=$(gh release view --repo "${GITHUB_REPOSITORY}" --json tagName -q '.tagName')
+          fi
+          version="${version#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid Timoni version '${version}'"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Set Timoni version in docs
+        env:
+          TIMONI_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          grep -rl --include='*.mdx' '{{TIMONI_VERSION}}' docs | xargs perl -i -pe 's/\{\{TIMONI_VERSION\}\}/$ENV{TIMONI_VERSION}/g'
+          echo "Set Timoni version ${TIMONI_VERSION} in docs"
       - name: Generate CLI reference
         run: make docgen
       - name: Add agent skills

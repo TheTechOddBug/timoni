@@ -79,6 +79,8 @@ The MDX site is built with Mintlify (`docs/docs.json` holds the theme, navigatio
 - **`skills/timoni/SKILL.md`** — the agent skill; see the `skills/` section below.
 - **`.mcp.json`** — points AI agents at the docs MCP server Mintlify hosts at `https://timoni.sh/mcp` (search over the published docs).
 
+Timoni version references in `docs/` (action pins, `TIMONI_VER=` in the install guide) use the `{{TIMONI_VERSION}}` marker inside MDX files, which `.github/workflows/docs.yaml` replaces with the release version before validating and publishing; never hardcode a Timoni release version in docs.
+
 New pages must be added to the navigation in `docs/docs.json`. The site is published from the `website` branch, which `.github/workflows/docs.yaml` rebuilds from `docs/` plus the generated `cmd/` pages on release tags; never edit that branch by hand.
 
 When you change behavior — flags, apply/prune/wait semantics, the `action.timoni.sh/*` annotations, the Runtime/Bundle schema, vendoring, signing — update the matching page(s) under `docs/` in the same change, not as a follow-up. A Runtime or Bundle change almost always touches a `docs/` root guide *and* a schema; a module-rendering change touches `docs/cue/module/`.
