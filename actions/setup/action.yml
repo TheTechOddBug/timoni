@@ -6,24 +6,79 @@ branding:
   icon: command
 inputs:
   version:
-    description: "Timoni version e.g. 0.0.2 (defaults to latest stable release)"
+    description: >-
+      Timoni version e.g. 0.33.0 or latest. When not set, the version is derived from the
+      action ref: a release tag or the commit SHA of a release tag installs that release,
+      any other ref installs the latest stable release.
     required: false
+  verify:
+    description: >-
+      Verify the downloaded archive against the build provenance attestation published
+      by the Timoni release workflow, using the gh CLI. Attestations are available for
+      Timoni v0.30.0 and newer.
+    required: false
+    default: "true"
+  token:
+    description: GitHub token used to query the releases API and the attestations API
+    required: false
+    default: ${{ github.token }}
+outputs:
+  version:
+    description: The installed Timoni version
+    value: ${{ steps.install.outputs.version }}
 runs:
   using: composite
   steps:
     - name: Download the binary to the runner's cache dir
+      id: install
       shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_VERIFY: ${{ inputs.verify }}
+        GH_TOKEN: ${{ inputs.token }}
+        ACTION_REF: ${{ github.action_ref }}
+        TIMONI_REPO: stefanprodan/timoni
       run: |
-        VERSION=${{ inputs.version }}
-        if [[ -z "$VERSION" ]] || [[ "$VERSION" == "latest" ]]; then
-          VERSION=$(curl -fsSL -H "Authorization: token ${{github.token}}" https://api.github.com/repos/stefanprodan/timoni/releases/latest | grep tag_name | cut -d '"' -f 4)
+        set -euo pipefail
+
+        case "$INPUT_VERIFY" in
+          true|false) ;;
+          *)
+            echo "::error::Invalid value '${INPUT_VERIFY}' for the verify input, expected true or false"
+            exit 1
+            ;;
+        esac
+
+        # Resolve the version from the input or from the ref used to reference the action.
+        VERSION="${INPUT_VERSION}"
+        if [[ -z "$VERSION" ]]; then
+          REF="${ACTION_REF#refs/tags/}"
+          if [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            VERSION="$REF"
+          elif [[ "$REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            REF=$(echo "$REF" | tr '[:upper:]' '[:lower:]')
+            VERSION=$(git ls-remote --tags "https://github.com/${TIMONI_REPO}.git" 'v*' \
+              | awk -v sha="$REF" '$1 == sha { sub("refs/tags/", "", $2); sub(/\^\{\}$/, "", $2); print $2 }' \
+              | sort -V | tail -n 1)
+            if [[ -z "$VERSION" ]]; then
+              echo "::warning::Commit ${REF} is not a Timoni release, installing the latest stable release"
+              VERSION="latest"
+            fi
+          else
+            VERSION="latest"
+          fi
+        fi
+        if [[ "$VERSION" == "latest" ]]; then
+          VERSION=$(curl -fsSL -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/${TIMONI_REPO}/releases/latest" | { grep tag_name || true; } | cut -d '"' -f 4)
         fi
         if [[ -z "$VERSION" ]]; then
-          echo "Unable to determine Timoni version"
+          echo "::error::Unable to determine Timoni version"
           exit 1
         fi
-        if [[ $VERSION = v* ]]; then
-          VERSION="${VERSION:1}"
+        VERSION="${VERSION#v}"
+        if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+          echo "::error::Invalid Timoni version '${VERSION}'"
+          exit 1
         fi
 
         OS=$(echo "${RUNNER_OS}" | tr '[:upper:]' '[:lower:]')
@@ -37,40 +92,76 @@ runs:
         fi
 
         TIMONI_EXEC_FILE="timoni"
+        ARCHIVE_EXT="tar.gz"
         if [[ "$OS" == "windows" ]]; then
-            TIMONI_EXEC_FILE="${TIMONI_EXEC_FILE}.exe"
+          TIMONI_EXEC_FILE="timoni.exe"
+          ARCHIVE_EXT="zip"
         fi
 
+        # A binary already in the tool cache is reused only when it was installed
+        # with attestation verification, or when verification is disabled.
         TIMONI_TOOL_DIR="${RUNNER_TOOL_CACHE}/timoni/${VERSION}/${OS}/${ARCH}"
-        if [[ ! -x "$TIMONI_TOOL_DIR/$TIMONI_EXEC_FILE" ]]; then
+        ATTESTED_MARKER="$TIMONI_TOOL_DIR/.attested"
+        if [[ ! -x "$TIMONI_TOOL_DIR/$TIMONI_EXEC_FILE" ]] || { [[ "$INPUT_VERIFY" == "true" ]] && [[ ! -f "$ATTESTED_MARKER" ]]; }; then
           DL_DIR="$(mktemp -dt timoni-XXXXXX)"
-          trap "rm -rf $DL_DIR" EXIT
+          trap 'rm -rf "$DL_DIR"' EXIT
 
           echo "Downloading timoni ${VERSION} for ${OS}/${ARCH}"
-          TIMONI_TARGET_FILE="timoni_${VERSION}_${OS}_${ARCH}.tar.gz"
+          TIMONI_TARGET_FILE="timoni_${VERSION}_${OS}_${ARCH}.${ARCHIVE_EXT}"
           TIMONI_CHECKSUMS_FILE="timoni_${VERSION}_checksums.txt"
-
-          TIMONI_DOWNLOAD_URL="https://github.com/stefanprodan/timoni/releases/download/v${VERSION}/"
+          TIMONI_DOWNLOAD_URL="https://github.com/${TIMONI_REPO}/releases/download/v${VERSION}"
 
           curl -fsSL -o "$DL_DIR/$TIMONI_TARGET_FILE" "$TIMONI_DOWNLOAD_URL/$TIMONI_TARGET_FILE"
           curl -fsSL -o "$DL_DIR/$TIMONI_CHECKSUMS_FILE" "$TIMONI_DOWNLOAD_URL/$TIMONI_CHECKSUMS_FILE"
 
           echo "Verifying checksum"
-          sum=$(openssl sha1 -sha256 "$DL_DIR/$TIMONI_TARGET_FILE" | awk '{print $2}')
-          expected_sum=$(grep "$TIMONI_TARGET_FILE" "$DL_DIR/$TIMONI_CHECKSUMS_FILE" | awk '{print $1}')
-          if [ "$sum" != "$expected_sum" ]; then
-            echo "SHA sum of ${TIMONI_TARGET_FILE} does not match. Aborting."
+          if command -v sha256sum >/dev/null 2>&1; then
+            sum=$(sha256sum "$DL_DIR/$TIMONI_TARGET_FILE" | awk '{print $1}')
+          else
+            sum=$(shasum -a 256 "$DL_DIR/$TIMONI_TARGET_FILE" | awk '{print $1}')
+          fi
+          expected_sum=$({ grep -E "[[:space:]]${TIMONI_TARGET_FILE}\$" "$DL_DIR/$TIMONI_CHECKSUMS_FILE" || true; } | awk '{print $1}')
+          if [[ -z "$expected_sum" ]] || [[ "$sum" != "$expected_sum" ]]; then
+            echo "::error::SHA256 sum of ${TIMONI_TARGET_FILE} does not match. Aborting."
             exit 1
+          fi
+
+          if [[ "$INPUT_VERIFY" == "true" ]]; then
+            echo "Verifying build provenance attestation"
+            if ! command -v gh >/dev/null 2>&1; then
+              echo "::error::The gh CLI is required for attestation verification, install it on the runner or set the verify input to false"
+              exit 1
+            fi
+            if ! gh attestation verify "$DL_DIR/$TIMONI_TARGET_FILE" \
+              --repo "${TIMONI_REPO}" \
+              --signer-workflow "${TIMONI_REPO}/.github/workflows/release.yaml" \
+              --source-ref "refs/tags/v${VERSION}"; then
+              echo "::error::Attestation verification failed for ${TIMONI_TARGET_FILE}. Attestations are published for Timoni v0.30.0 and newer."
+              exit 1
+            fi
+            echo "Attestation verified: ${TIMONI_TARGET_FILE} was built by ${TIMONI_REPO}/.github/workflows/release.yaml at refs/tags/v${VERSION}"
           fi
 
           echo "Installing timoni to ${TIMONI_TOOL_DIR}"
           mkdir -p "$TIMONI_TOOL_DIR"
-          tar xzf "$DL_DIR/$TIMONI_TARGET_FILE" -C "$TIMONI_TOOL_DIR" $TIMONI_EXEC_FILE
+          if [[ "$ARCHIVE_EXT" == "zip" ]]; then
+            if command -v unzip >/dev/null 2>&1; then
+              unzip -o -q "$DL_DIR/$TIMONI_TARGET_FILE" "$TIMONI_EXEC_FILE" -d "$TIMONI_TOOL_DIR"
+            else
+              7z x -y -o"$TIMONI_TOOL_DIR" "$DL_DIR/$TIMONI_TARGET_FILE" "$TIMONI_EXEC_FILE" >/dev/null
+            fi
+          else
+            tar xzf "$DL_DIR/$TIMONI_TARGET_FILE" -C "$TIMONI_TOOL_DIR" "$TIMONI_EXEC_FILE"
+          fi
           chmod +x "$TIMONI_TOOL_DIR/$TIMONI_EXEC_FILE"
+          if [[ "$INPUT_VERIFY" == "true" ]]; then
+            touch "$ATTESTED_MARKER"
+          fi
         fi
 
         echo "Adding timoni to path"
         echo "$TIMONI_TOOL_DIR" >> "$GITHUB_PATH"
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
     - name: "Print the version"
       shell: bash
