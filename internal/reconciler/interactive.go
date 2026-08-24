@@ -57,6 +57,10 @@ func NewInteractiveReconciler(log logr.Logger, copts *CommonOptions, iopts *Inte
 	return reconciler
 }
 
+// ApplyInstance reconciles the instance objects onto the cluster. In dry-run
+// and diff mode it performs a server-side apply dry run instead, and in diff
+// mode it returns an InstanceDriftError when applying the instance would
+// change the cluster state.
 func (r *InteractiveReconciler) ApplyInstance(ctx context.Context, log logr.Logger, builder *engine.ModuleBuilder, buildResult cue.Value) error {
 	namespaceExists, err := r.NamespaceExists(ctx)
 	if err != nil {
@@ -68,8 +72,13 @@ func (r *InteractiveReconciler) ApplyInstance(ctx context.Context, log logr.Logg
 			log.Info(logger.ColorizeJoin(logger.ColorizeSubject("Namespace/"+r.Namespace()),
 				ssa.CreatedAction, logger.DryRunServer))
 		}
-		if err := r.DryRunDiff(logr.NewContext(ctx, log), namespaceExists); err != nil {
+		changed, err := r.DryRunDiff(logr.NewContext(ctx, log), namespaceExists)
+		if err != nil {
 			return err
+		}
+
+		if r.Diff && changed {
+			return &InstanceDriftError{Name: r.Name(), Namespace: r.Namespace()}
 		}
 
 		log.Info(logger.ColorizeJoin("applied successfully", logger.ColorizeDryRun("(server dry run)")))
@@ -101,7 +110,10 @@ func (r *InteractiveReconciler) ApplyInstance(ctx context.Context, log logr.Logg
 	return r.applyInstanceStages(ctx, log, builder, buildResult)
 }
 
-func (r *InteractiveReconciler) DryRunDiff(ctx context.Context, namespaceExists bool) error {
+// DryRunDiff performs a server-side apply dry run of the instance objects,
+// printing the field changes when running in diff mode. It returns true if
+// applying the instance would change the cluster state.
+func (r *InteractiveReconciler) DryRunDiff(ctx context.Context, namespaceExists bool) (bool, error) {
 	return dyff.InstanceDryRunDiff(
 		ctx,
 		r.resourceManager,

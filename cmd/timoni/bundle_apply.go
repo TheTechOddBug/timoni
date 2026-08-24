@@ -60,7 +60,13 @@ var bundleApplyCmd = &cobra.Command{
   cat ./bundle_secrets.cue | timoni bundle apply -f ./bundle.cue -f -
 `,
 	Args: cobra.NoArgs,
-	RunE: runBundleApplyCmd,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		err := runBundleApplyCmd(cmd)
+		if bundleApplyArgs.diff {
+			return diffExitErr(err)
+		}
+		return err
+	},
 }
 
 type bundleApplyFlags struct {
@@ -87,14 +93,14 @@ func init() {
 	bundleApplyCmd.Flags().BoolVar(&bundleApplyArgs.dryrun, "dry-run", false,
 		"Perform a server-side apply dry run.")
 	bundleApplyCmd.Flags().BoolVar(&bundleApplyArgs.diff, "diff", false,
-		"Perform a server-side apply dry run and prints the diff.")
+		"Perform a server-side apply dry run and prints the diff. Exits with code 1 if drift is detected and code 2 on errors.")
 	bundleApplyCmd.Flags().BoolVar(&bundleApplyArgs.wait, "wait", true,
 		"Wait for the applied Kubernetes objects to become ready.")
 	bundleApplyCmd.Flags().Var(&bundleApplyArgs.creds, bundleApplyArgs.creds.Type(), bundleApplyArgs.creds.Description())
 	bundleCmd.AddCommand(bundleApplyCmd)
 }
 
-func runBundleApplyCmd(cmd *cobra.Command, _ []string) error {
+func runBundleApplyCmd(cmd *cobra.Command) error {
 	start := time.Now()
 	files := bundleApplyArgs.files
 	if len(files) == 0 {
@@ -153,6 +159,8 @@ func runBundleApplyCmd(cmd *cobra.Command, _ []string) error {
 	defer cancel()
 
 	moduleCache := make(map[moduleCacheKey]*fetchedModule)
+
+	var driftErrs []error
 
 	for _, cluster := range clusters {
 		kubeconfigArgs.Context = &cluster.KubeContext
@@ -229,22 +237,37 @@ func runBundleApplyCmd(cmd *cobra.Command, _ []string) error {
 			log.Info(startMsg)
 		}
 
+		clusterDrifts := len(driftErrs)
 		for _, instance := range bundle.Instances {
 			instance.Cluster = cluster.Name
-			if err := applyBundleInstance(logr.NewContext(ctx, log), instance, kubeVersion, tmpDir, modDirs[instance.Name], cmd.OutOrStdout()); err != nil {
+			err := applyBundleInstance(logr.NewContext(ctx, log), instance, kubeVersion, tmpDir, modDirs[instance.Name], cmd.OutOrStdout())
+			if err != nil {
+				// In diff mode, keep diffing the remaining instances and
+				// report the drifted ones at the end of the run.
+				var driftErr *reconciler.InstanceDriftError
+				if errors.As(err, &driftErr) {
+					if !cluster.IsDefault() {
+						err = fmt.Errorf("%w on cluster %s", err, cluster.Name)
+					}
+					driftErrs = append(driftErrs, err)
+					continue
+				}
 				return err
 			}
 		}
 
 		elapsed := time.Since(start)
 		if bundleApplyArgs.dryrun || bundleApplyArgs.diff {
-			log.Info(fmt.Sprintf("applied successfully %s",
-				logger.ColorizeDryRun("(server dry run)")))
+			if len(driftErrs) == clusterDrifts {
+				log.Info(fmt.Sprintf("applied successfully %s",
+					logger.ColorizeDryRun("(server dry run)")))
+			}
 		} else {
 			log.Info(fmt.Sprintf("applied successfully in %s", elapsed.Round(time.Second)))
 		}
 	}
-	return nil
+
+	return errors.Join(driftErrs...)
 }
 
 // fetchedModule holds the local root directory and resolved reference of a

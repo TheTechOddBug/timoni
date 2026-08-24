@@ -85,7 +85,13 @@ The apply command performs the following steps:
   --values ./values-1.yaml \
   --values ./values-2.json
 `,
-	RunE: runApplyCmd,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		err := runApplyCmd(cmd, args)
+		if applyArgs.diff {
+			return diffExitErr(err)
+		}
+		return err
+	},
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		switch len(args) {
 		case 0:
@@ -128,7 +134,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&applyArgs.dryrun, "dry-run", false,
 		"Perform a server-side apply dry run.")
 	applyCmd.Flags().BoolVar(&applyArgs.diff, "diff", false,
-		"Perform a server-side apply dry run and prints the diff.")
+		"Perform a server-side apply dry run and prints the diff. Exits with code 1 if drift is detected and code 2 on errors.")
 	applyCmd.Flags().BoolVar(&applyArgs.wait, "wait", true,
 		"Wait for the applied Kubernetes objects to become ready.")
 	applyCmd.Flags().Var(&applyArgs.creds, applyArgs.creds.Type(), applyArgs.creds.Description())

@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -920,4 +921,124 @@ runtime: {
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(output).To(ContainSubstring(version))
 	}
+}
+
+func Test_BundleApply_Diff(t *testing.T) {
+	g := NewWithT(t)
+
+	bundleName := rnd("my-bundle")
+	modPath := "testdata/module"
+	namespace := rnd("my-namespace")
+	modName := rnd("my-mod")
+	modURL := fmt.Sprintf("%s/%s", dockerRegistry, modName)
+	modVer := "1.0.0"
+
+	_, err := executeCommand(fmt.Sprintf(
+		"mod push %s oci://%s -v %s --resolve-symlinks",
+		modPath,
+		modURL,
+		modVer,
+	))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	bundleTmpl := `
+bundle: {
+	apiVersion: "v1alpha1"
+	name: "%[1]s"
+	instances: {
+		frontend: {
+			module: {
+				url:     "oci://%[2]s"
+				version: "%[3]s"
+			}
+			namespace: "%[4]s"
+			values: server: enabled: false
+		}
+		backend: {
+			module: {
+				url:     "oci://%[2]s"
+				version: "%[3]s"
+			}
+			namespace: "%[4]s"
+			values: domain: "%[5]s"
+		}
+	}
+}
+`
+
+	bundleFor := func(domain string) string {
+		data := fmt.Sprintf(bundleTmpl, bundleName, modURL, modVer, namespace, domain)
+		path := filepath.Join(t.TempDir(), "bundle.cue")
+		g.Expect(os.WriteFile(path, []byte(data), 0644)).To(Succeed())
+		return path
+	}
+
+	t.Run("detects drift for all instances at first install", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"bundle apply -f %s -p main --diff",
+			bundleFor("example.internal"),
+		))
+		t.Log("\n", output)
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("drift detected for instance frontend"))
+		g.Expect(err.Error()).To(ContainSubstring("drift detected for instance backend"))
+
+		var exitErr *ExitError
+		g.Expect(errors.As(err, &exitErr)).To(BeTrue())
+		g.Expect(exitErr.Code).To(Equal(1))
+	})
+
+	t.Run("exits cleanly when in sync", func(t *testing.T) {
+		g := NewWithT(t)
+		_, err := executeCommand(fmt.Sprintf(
+			"bundle apply -f %s -p main --wait",
+			bundleFor("example.internal"),
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+
+		output, err := executeCommand(fmt.Sprintf(
+			"bundle apply -f %s -p main --diff",
+			bundleFor("example.internal"),
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		t.Log("\n", output)
+	})
+
+	t.Run("detects drift for changed values", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"bundle apply -f %s -p main --diff",
+			bundleFor("example.k8s"),
+		))
+		t.Log("\n", output)
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("drift detected for instance backend"))
+		g.Expect(err.Error()).ToNot(ContainSubstring("drift detected for instance frontend"))
+		g.Expect(output).To(ContainSubstring("example.k8s"))
+
+		var exitErr *ExitError
+		g.Expect(errors.As(err, &exitErr)).To(BeTrue())
+		g.Expect(exitErr.Code).To(Equal(1))
+	})
+
+	t.Run("dry run exits cleanly on drift", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"bundle apply -f %s -p main --dry-run",
+			bundleFor("example.k8s"),
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		t.Log("\n", output)
+	})
+
+	t.Run("exits with failure code on errors", func(t *testing.T) {
+		g := NewWithT(t)
+		_, err := executeCommand("bundle apply -f testdata/does-not-exist.cue -p main --diff")
+		g.Expect(err).To(HaveOccurred())
+
+		var exitErr *ExitError
+		g.Expect(errors.As(err, &exitErr)).To(BeTrue())
+		g.Expect(exitErr.Code).To(Equal(2))
+	})
 }

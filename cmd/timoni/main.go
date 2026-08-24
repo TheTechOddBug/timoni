@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"path"
@@ -109,7 +110,13 @@ func main() {
 		// Set the logger err to nil to pretty print
 		// the error message on multiple lines.
 		cliLogger.Error(nil, err.Error())
-		os.Exit(1)
+
+		exitCode := 1
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.Code
+		}
+		os.Exit(exitCode)
 	}
 }
 

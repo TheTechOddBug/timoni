@@ -6,7 +6,7 @@ metadata:
   author: Stefan Prodan
   homepage: https://timoni.sh
   source: https://github.com/stefanprodan/timoni
-  version: "0.1.0"
+  version: "0.1.1"
 ---
 
 # Timoni
@@ -156,7 +156,7 @@ bundle: {
   cluster (add `--print-value` to inspect the computed bundle),
   `timoni bundle build -f bundle.cue` renders the manifests offline, and
   `timoni bundle apply -f bundle.cue --diff` previews the changes against the
-  cluster before applying.
+  cluster before applying (exits 1 on drift, 2 on failure).
 - Instances are applied in declaration order, each waiting for readiness
   before the next (`--wait=false` disables waiting). Deletion runs in reverse
   order.
@@ -338,7 +338,9 @@ regardless. Everything else prints plaintext: `bundle vet --print-value`,
   alphanumerics with `-`, `_` or `.` inside, 63 chars max; Kubernetes object
   names generated from them still follow Kubernetes rules.
 - `--dry-run` reports the action per object (created, configured, unchanged)
-  without applying; `--diff` does the same and also prints the field changes.
+  without applying; `--diff` does the same and also prints the field changes,
+  exiting with code 1 when drift is detected and code 2 when the dry run
+  fails, so it doubles as a drift check in CI.
 - Objects removed from a module are pruned on the next apply. Guard
   data-bearing objects with `action.timoni.sh/prune: "disabled"`.
 - Immutable-field changes (Job template, StatefulSet volume claims, Service

@@ -60,8 +60,8 @@ func TestApply_DiffMasksSecrets(t *testing.T) {
 		modPath,
 		valuesPath,
 	))
-	g.Expect(err).ToNot(HaveOccurred())
 	t.Log("\n", output)
+	g.Expect(err).To(MatchError(ContainSubstring("drift detected")))
 
 	g.Expect(output).To(ContainSubstring("Secret/%s/%s configured", namespace, name))
 	g.Expect(output).To(ContainSubstring("*** (before)"))
