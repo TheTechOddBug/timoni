@@ -4,29 +4,14 @@ sidebarTitle: "GitHub Actions"
 description: "Publish module versions from GitHub workflows."
 ---
 
-Timoni can be used in GitHub workflows to perform actions
-such as build, test and push modules to container registries.
+Timoni can be used in GitHub workflows to vet, push and sign modules to container registries.
 
-## Usage
+The workflows below install the Timoni CLI with the
+[Timoni GitHub Action](/github-actions) and run `timoni mod` commands against the module.
 
-To run Timoni commands on GitHub Linux runners,
-add the following steps to your GitHub workflow:
+## Push to GitHub Container Registry
 
-```yaml
-steps:
-  - name: Setup Timoni
-    uses: stefanprodan/timoni/actions/setup@main
-    with:
-      version: latest # latest or exact version e.g. 0.13.0
-  - name: Run Timoni
-    run: timoni version
-```
-
-## Examples
-
-### Push to GitHub Container Registry
-
-Example workflow for linting, testing and pushing a module to GitHub Container Registry:
+Example workflow for vetting and pushing a module to GitHub Container Registry:
 
 ```yaml
 name: Release module
@@ -43,25 +28,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.1
       - name: Setup Timoni
-        uses: stefanprodan/timoni/actions/setup@main
+        uses: stefanprodan/timoni/actions/setup@v{{TIMONI_VERSION}}
       - name: Vet module
         run: |
-          timoni mod vet ./modules/my-module
+          timoni mod vet ./my-module
       - name: Push module
         run: |
           timoni mod push ./my-module \
             oci://ghcr.io/${{ github.repository_owner }}/my-module \
             --version ${{ github.ref_name }} \
-            --creds ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}  
+            --creds ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }} \
             --latest \
             -a 'org.opencontainers.image.licenses=Apache-2.0' \
             -a 'org.opencontainers.image.source=https://github.com/${{ github.repository }}' \
-            -a 'org.opencontainers.image.description=My Timoni module.' 
+            -a 'org.opencontainers.image.description=My Timoni module.'
 ```
 
-### Push and sign with Cosign Keyless
+## Push and sign with Cosign Keyless
 
 Example workflow for pushing and signing the module using Cosign and GitHub OIDC:
 
@@ -69,7 +54,7 @@ Example workflow for pushing and signing the module using Cosign and GitHub OIDC
 name: Release and sign module
 on:
   push:
-    tag: ['*'] # semver format
+    tags: ['*'] # semver format
 
 permissions:
   contents: read # needed for checkout
@@ -81,13 +66,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.1
       - name: Setup Cosign
-        uses: sigstore/cosign-installer@main
+        uses: sigstore/cosign-installer@v4.1.2
       - name: Setup Timoni
-        uses: stefanprodan/timoni/actions/setup@main
+        uses: stefanprodan/timoni/actions/setup@v{{TIMONI_VERSION}}
       - name: Login to GHCR
-        uses: docker/login-action@v2
+        uses: docker/login-action@v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -107,7 +92,7 @@ jobs:
             --sign=cosign
 ```
 
-### Push to Docker Hub
+## Push to Docker Hub
 
 Example workflow for using `docker login` to authenticate to Docker Hub:
 
@@ -115,7 +100,7 @@ Example workflow for using `docker login` to authenticate to Docker Hub:
 name: Release module
 on:
   push:
-    tag: ['*'] # semver format
+    tags: ['*'] # semver format
 
 permissions:
   contents: read # needed for checkout
@@ -125,11 +110,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7.0.1
       - name: Setup Timoni
-        uses: stefanprodan/timoni/actions/setup@main
+        uses: stefanprodan/timoni/actions/setup@v{{TIMONI_VERSION}}
       - name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v4.6.0
         with:
           registry: docker.io
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -141,11 +126,11 @@ jobs:
         run: |
           timoni mod push ./my-module \
             oci://docker.io/my-org/my-module \
-            --version ${{ github.ref_name }}
+            --version ${{ github.ref_name }} \
             --latest \
             -a 'org.opencontainers.image.licenses=Apache-2.0' \
             -a 'org.opencontainers.image.source=https://github.com/${{ github.repository }}' \
-            -a 'org.opencontainers.image.description=My Timoni module.' 
+            -a 'org.opencontainers.image.description=My Timoni module.'
       - name: Pull
         run: |
           mkdir -p /tmp/my-module
