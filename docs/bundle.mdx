@@ -399,6 +399,11 @@ timoni bundle apply --dry-run --diff -f bundle.cue
 The values of the Kubernetes Secrets `data` entries are masked in the diff
 output: changed entries are printed as `*** (before)` and `*** (after)`.
 
+When the cluster state is in sync with the bundle definition, the command
+exits with code 0. When drift is detected, it exits with code 1, and when
+the dry run fails, it exits with code 2. This allows using
+`timoni bundle apply --diff` as a drift check in CI.
+
 ### Force Upgrade
 
 If an upgrade contains changes to immutable fields, such as changing the image
