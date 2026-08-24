@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright 2023 Stefan Prodan
+# Copyright 2026 Stefan Prodan
 # SPDX-License-Identifier: Apache-2.0
 
 set -o errexit
