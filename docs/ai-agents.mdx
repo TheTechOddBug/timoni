@@ -16,13 +16,22 @@ when a task calls for it.
 
 <Tabs sync={false}>
   <Tab title="skills CLI">
-    Install all the Timoni skills for supported agents (Claude Code, Cursor, Codex, Copilot and others) with:
+    Install the Timoni skills for supported agents (Claude Code, Cursor, Codex, Copilot and others) with:
 
     ```shell
     npx skills add https://timoni.sh
     ```
 
     The command discovers the skills from the Timoni website and places them in the agent's skills directory.
+  </Tab>
+  <Tab title="gh CLI">
+    Install the Timoni skills with:
+
+    ```shell
+    gh skill install stefanprodan/timoni
+    ```
+
+    The command retrieves the skills from the Timoni GitHub repository (requires the `gh` CLI to be authenticated).
   </Tab>
   <Tab title="Manual">
     Download the skill file into a directory named `timoni`,
@@ -109,7 +118,13 @@ and look up details that go beyond the skills, using the latest published docs.
     ```
   </Tab>
   <Tab title="OpenCode">
-    Add the server to `opencode.jsonc`:
+    Register the server with the OpenCode CLI:
+
+    ```shell
+    opencode mcp add timoni-docs --url https://timoni.sh/mcp
+    ```
+
+    Or add it to the `opencode.jsonc` file in your project:
 
     ```jsonc
     {
