@@ -75,7 +75,7 @@ The AMD64 and ARM64 binaries can be downloaded from GitHub [releases](https://gi
     ```toml
     # .prototools file
 
-    timoni = "0.29.0"
+    timoni = "{{TIMONI_VERSION}}"
 
     [plugins]
     timoni = "source:https://raw.githubusercontent.com/stefanprodan/timoni/main/proto-plugin.toml"
@@ -104,7 +104,7 @@ The AMD64 and ARM64 binaries can be downloaded from GitHub [releases](https://gi
     ```
   </Tab>
   <Tab title="from source">
-    Using Go &gt;= 1.26:
+    Using Go &gt;= 1.27:
 
     ```shell
     go install github.com/stefanprodan/timoni/cmd/timoni@latest
@@ -201,7 +201,7 @@ To verify a release artifact such as the Timoni binary tarball,
 you can use the [slsa-verifier](https://github.com/slsa-framework/slsa-verifier) tool:
 
 ```shell
-TIMONI_VER=0.29.0 && \
+TIMONI_VER={{TIMONI_VERSION}} && \
 gh release download v${TIMONI_VER} -R=stefanprodan/timoni -p="*" && \
 slsa-verifier verify-artifact \
 --provenance-path timoni_${TIMONI_VER}_provenance.intoto.jsonl \
@@ -210,6 +210,22 @@ slsa-verifier verify-artifact \
 timoni_${TIMONI_VER}_darwin_arm64.tar.gz
 ```
 
+The release artifacts are also attested with
+[GitHub artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations).
+To verify a release artifact with the [GitHub CLI](https://cli.github.com):
+
+```shell
+TIMONI_VER={{TIMONI_VERSION}} && \
+gh release download v${TIMONI_VER} -R=stefanprodan/timoni -p="timoni_${TIMONI_VER}_darwin_arm64.tar.gz" && \
+gh attestation verify timoni_${TIMONI_VER}_darwin_arm64.tar.gz \
+--repo stefanprodan/timoni \
+--signer-workflow stefanprodan/timoni/.github/workflows/release.yaml \
+--source-ref refs/tags/v${TIMONI_VER}
+```
+
+The [Timoni GitHub Action](/github-actions) performs the same verification
+before installing the binary on GitHub runners.
+
 Each release comes with a Software Bill of Materials (SBOM) in [SPDX](https://spdx.dev) format.
 The SBOMs are generated on GitHub-hosted runners using
 [GoReleaser](https://goreleaser.com) and [Syft](https://github.com/anchore/syft).
@@ -217,7 +233,7 @@ The SBOMs are generated on GitHub-hosted runners using
 To scan a release for vulnerabilities, you can use [Grype](https://github.com/anchore/grype):
 
 ```shell
-TIMONI_VER=0.29.0 && \
+TIMONI_VER={{TIMONI_VERSION}} && \
 gh release download v${TIMONI_VER} -R=stefanprodan/timoni -p="*sbom.spdx.json" && \
 grype sbom:./timoni_${TIMONI_VER}_sbom.spdx.json
 ```
