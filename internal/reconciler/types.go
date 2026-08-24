@@ -95,6 +95,17 @@ type ReadinessError struct {
 func (e *ReadinessError) Error() string { return e.Err.Error() }
 func (e *ReadinessError) Unwrap() error { return e.Err }
 
+// InstanceDriftError is returned by InteractiveReconciler.ApplyInstance in
+// diff mode when applying the instance would change the cluster state.
+type InstanceDriftError struct {
+	Name      string
+	Namespace string
+}
+
+func (e *InstanceDriftError) Error() string {
+	return fmt.Sprintf("drift detected for instance %s in namespace %s", e.Name, e.Namespace)
+}
+
 type InstanceOwnershipConflict struct{ InstanceName, CurrentOwnerBundle string }
 type InstanceOwnershipConflictErr []InstanceOwnershipConflict
 

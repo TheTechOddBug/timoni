@@ -30,7 +30,9 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/gonvenience/ytbx"
 	"github.com/homeport/dyff/pkg/dyff"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
 	apiv1 "github.com/stefanprodan/timoni/api/v1alpha1"
@@ -87,6 +89,15 @@ func DiffYAML(liveFile, mergedFile string, output io.Writer) error {
 	return printer.Print(output, report)
 }
 
+// InstanceDryRunDiff performs a server-side apply dry run of the instance
+// objects and logs the pending change of each one. When withDiff is set, the
+// field changes of the objects that differ from the cluster state are printed
+// to w in YAML diff format, and the dry-run failures are aggregated into the
+// returned error. It returns true if applying the instance would change the
+// cluster state, i.e. if any object would be created, configured or deleted.
+// Mirroring the apply and prune semantics, existing objects annotated as
+// one-off are skipped, and stale objects that are absent from the cluster or
+// annotated with prune disabled are not counted as pending deletions.
 func InstanceDryRunDiff(ctx context.Context,
 	rm *ssa.ResourceManager,
 	objects []*unstructured.Unstructured,
@@ -94,10 +105,16 @@ func InstanceDryRunDiff(ctx context.Context,
 	nsExists bool,
 	tmpDir string,
 	withDiff bool,
-	w io.Writer) error {
+	w io.Writer) (bool, error) {
 	log := logr.FromContextOrDiscard(ctx)
 	diffOpts := ssa.DefaultDiffOptions()
+	diffOpts.IfNotPresentSelector = map[string]string{
+		apiv1.IfNotPresentAction: apiv1.EnabledValue,
+	}
 	sort.Sort(ssa.SortableUnstructureds(objects))
+
+	changed := !nsExists
+	failed := 0
 
 	for _, r := range objects {
 		if !nsExists {
@@ -108,6 +125,7 @@ func InstanceDryRunDiff(ctx context.Context,
 		change, liveObject, mergedObject, err := rm.Diff(ctx, r, diffOpts)
 		if err != nil {
 			if ssaerr.IsImmutableError(err) {
+				changed = true
 				if ssautil.AnyInMetadata(r, map[string]string{
 					apiv1.ForceAction: apiv1.EnabledValue,
 				}) {
@@ -116,10 +134,15 @@ func InstanceDryRunDiff(ctx context.Context,
 					log.Error(nil, logger.ColorizeJoin(r, "immutable", logger.DryRunServer))
 				}
 			} else {
+				failed++
 				log.Error(err, logger.ColorizeUnstructured(r))
 			}
 
 			continue
+		}
+
+		if change.Action == ssa.CreatedAction || change.Action == ssa.ConfiguredAction {
+			changed = true
 		}
 
 		log.Info(logger.ColorizeJoin(change, logger.DryRunServer))
@@ -127,24 +150,41 @@ func InstanceDryRunDiff(ctx context.Context,
 			liveYAML, _ := yaml.Marshal(liveObject)
 			liveFile := filepath.Join(tmpDir, "live.yaml")
 			if err := os.WriteFile(liveFile, liveYAML, 0644); err != nil {
-				return err
+				return changed, err
 			}
 
 			mergedYAML, _ := yaml.Marshal(mergedObject)
 			mergedFile := filepath.Join(tmpDir, "merged.yaml")
 			if err := os.WriteFile(mergedFile, mergedYAML, 0644); err != nil {
-				return err
+				return changed, err
 			}
 
 			if err := DiffYAML(liveFile, mergedFile, w); err != nil {
-				return err
+				return changed, err
 			}
 		}
 	}
 
 	for _, r := range staleObjects {
+		existingObject := &unstructured.Unstructured{}
+		existingObject.SetGroupVersionKind(r.GroupVersionKind())
+		err := rm.Client().Get(ctx, client.ObjectKeyFromObject(r), existingObject)
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err == nil && ssautil.AnyInMetadata(existingObject, map[string]string{
+			apiv1.PruneAction: apiv1.DisabledValue,
+		}) {
+			log.Info(logger.ColorizeJoin(r, ssa.SkippedAction, logger.DryRunServer))
+			continue
+		}
+		changed = true
 		log.Info(logger.ColorizeJoin(r, ssa.DeletedAction, logger.DryRunServer))
 	}
 
-	return nil
+	if withDiff && failed > 0 {
+		return changed, fmt.Errorf("dry run failed for %d resource(s)", failed)
+	}
+
+	return changed, nil
 }

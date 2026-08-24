@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	apiv1 "github.com/stefanprodan/timoni/api/v1alpha1"
+	"github.com/stefanprodan/timoni/internal/reconciler"
 )
 
 func TestApply(t *testing.T) {
@@ -425,5 +427,176 @@ func TestApply_GlobalResources(t *testing.T) {
 		))
 		g.Expect(err).ToNot(HaveOccurred())
 		t.Log("\n", output)
+	})
+}
+
+func TestApply_Diff(t *testing.T) {
+	modPath := "testdata/module"
+	name := rnd("my-instance")
+	namespace := rnd("my-namespace")
+
+	t.Run("detects drift at first install", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -p main --diff",
+			namespace,
+			name,
+			modPath,
+		))
+		t.Log("\n", output)
+		g.Expect(err).To(HaveOccurred())
+
+		var exitErr *ExitError
+		g.Expect(errors.As(err, &exitErr)).To(BeTrue())
+		g.Expect(exitErr.Code).To(Equal(1))
+
+		var driftErr *reconciler.InstanceDriftError
+		g.Expect(errors.As(err, &driftErr)).To(BeTrue())
+		g.Expect(driftErr.Name).To(Equal(name))
+		g.Expect(driftErr.Namespace).To(Equal(namespace))
+	})
+
+	t.Run("exits cleanly when in sync", func(t *testing.T) {
+		g := NewWithT(t)
+		_, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -p main --wait",
+			namespace,
+			name,
+			modPath,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+
+		output, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -p main --diff",
+			namespace,
+			name,
+			modPath,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		t.Log("\n", output)
+	})
+
+	t.Run("detects drift for changed values", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -f %s -p main --diff",
+			namespace,
+			name,
+			modPath,
+			modPath+"-values/example.com.cue",
+		))
+		t.Log("\n", output)
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("drift detected"))
+		g.Expect(output).To(ContainSubstring("example.com"))
+
+		var exitErr *ExitError
+		g.Expect(errors.As(err, &exitErr)).To(BeTrue())
+		g.Expect(exitErr.Code).To(Equal(1))
+	})
+
+	t.Run("dry run exits cleanly on drift", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -f %s -p main --dry-run",
+			namespace,
+			name,
+			modPath,
+			modPath+"-values/example.com.cue",
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		t.Log("\n", output)
+	})
+
+	t.Run("skips drift for one-off resources", func(t *testing.T) {
+		g := NewWithT(t)
+		valuesPath := filepath.Join(t.TempDir(), "values.cue")
+		valuesData := fmt.Sprintf(`values: {
+	domain: "example.oneoff"
+	metadata: annotations: "%s": "%s"
+}`, apiv1.IfNotPresentAction, apiv1.EnabledValue)
+		g.Expect(os.WriteFile(valuesPath, []byte(valuesData), 0644)).To(Succeed())
+
+		output, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -f %s -p main --diff",
+			namespace,
+			name,
+			modPath,
+			valuesPath,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		t.Log("\n", output)
+	})
+
+	t.Run("detects drift for stale resources", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -f %s -p main --diff",
+			namespace,
+			name,
+			modPath,
+			modPath+"-values/server-only.cue",
+		))
+		t.Log("\n", output)
+		g.Expect(err).To(MatchError(ContainSubstring("drift detected")))
+	})
+
+	t.Run("ignores absent stale resources", func(t *testing.T) {
+		g := NewWithT(t)
+		clientCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-client", name),
+				Namespace: namespace,
+			},
+		}
+		g.Expect(envTestClient.Delete(context.Background(), clientCM)).To(Succeed())
+
+		output, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -f %s -p main --diff",
+			namespace,
+			name,
+			modPath,
+			modPath+"-values/server-only.cue",
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		t.Log("\n", output)
+	})
+
+	t.Run("skips drift for prune-disabled stale resources", func(t *testing.T) {
+		g := NewWithT(t)
+		_, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -f %s -p main --wait",
+			namespace,
+			name,
+			modPath,
+			modPath+"-values/skip-prune.cue",
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+
+		output, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s -f %s -f %s -p main --diff",
+			namespace,
+			name,
+			modPath,
+			modPath+"-values/skip-prune.cue",
+			modPath+"-values/server-only.cue",
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		t.Log("\n", output)
+	})
+
+	t.Run("exits with failure code on errors", func(t *testing.T) {
+		g := NewWithT(t)
+		_, err := executeCommand(fmt.Sprintf(
+			"apply -n %s %s %s --diff",
+			namespace,
+			name,
+			"testdata/does-not-exist",
+		))
+		g.Expect(err).To(HaveOccurred())
+
+		var exitErr *ExitError
+		g.Expect(errors.As(err, &exitErr)).To(BeTrue())
+		g.Expect(exitErr.Code).To(Equal(2))
 	})
 }
