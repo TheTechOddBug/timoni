@@ -27,10 +27,9 @@ Run a single test:
 go test ./cmd/timoni/... -run TestApply -v
 ```
 
-- `make test` is the canonical pre-commit gate; it runs `go mod tidy`, code generation, fmt, and vet before testing, so a clean `make test` implies all of those pass.
+- `make test` is the canonical pre-commit gate; it runs `go mod tidy`, code generation, fmt, vet and golangci-lint before testing, so a clean `make test` implies all of those pass.
 - Tests in `cmd/timoni` and packages that talk to the API server require **envtest** (`make install-envtest` downloads the Kubernetes test binaries into `./bin`).
 - After changing CUE schemas or example modules, run `make cue-vet`. The blueprint, example and testdata modules vendor the canonical `schemas/timoni.sh/core/v1alpha1` package as relative symlinks under `cue.mod/pkg`, so schema changes propagate without a sync step. After changing types in `api/v1alpha1`, run `make generate`.
-- After changing any command's `Use`/`Short`/`Long`/flags in `cmd/timoni/`, run `make docgen` — the CLI reference under `docs/cmd/` is generated and must be regenerated to match, or it goes stale.
 
 ## Architecture
 
@@ -103,7 +102,10 @@ Evaluate skill changes by running a sub-agent against it:
 - `blueprints/` — module scaffolding templates.
 - `actions/` — GitHub Action for using Timoni in CI.
 - `internal/dyff/` — structured YAML diffing for the interactive flow.
+- `internal/mask/` — secret redaction applied to `build`/`bundle build` output.
+- `internal/flags/`, `internal/logger/`, `internal/fscopy/` — shared cobra flag types, logger setup, and fs helpers used across commands.
 - `internal/testutils/` — gomega matchers and an in-process OCI registry for tests.
+- `test/` — Kubernnetes Kind e2e setup (see `test/README.md`); run its targets only when the user explicitly asks.
 
 ## Conventions
 
@@ -114,3 +116,4 @@ Evaluate skill changes by running a sub-agent against it:
 - Add Go doc comments for new functions and types.
 - After modifying a function or type, update its doc comment.
 - Add in-line comments for complex logic but don't comment obvious code.
+- Commits require a `Signed-off-by` trailer (DCO — use `git commit -s`); subjects are short and imperative, typically with a `feat:`/`fix:`/`docs:` prefix.
