@@ -754,3 +754,1342 @@ import (
 		namespace?:  string
 	}
 }
+
+// Original CRD used by 'timoni mod vet' for validation.
+_crd: {
+	apiVersion: "apiextensions.k8s.io/v1"
+	kind:       "CustomResourceDefinition"
+	metadata: {
+		name: "canaries.flagger.app"
+	}
+	spec: {
+		group: "flagger.app"
+		names: {
+			categories: ["all"]
+			kind:     "Canary"
+			listKind: "CanaryList"
+			plural:   "canaries"
+			singular: "canary"
+		}
+		scope: "Namespaced"
+		versions: [{
+			name:    "v1beta1"
+			served:  true
+			storage: true
+			schema: {
+				openAPIV3Schema: {
+					properties: {
+						apiVersion: {
+							type: "string"
+						}
+						kind: {
+							type: "string"
+						}
+						metadata: {
+							type: "object"
+						}
+						spec: {
+							properties: {
+								analysis: {
+									oneOf: [{
+										required: ["interval", "threshold", "iterations"]
+									}, {
+										required: ["interval", "threshold", "stepWeight"]
+									}, {
+										required: ["interval", "threshold", "stepWeights"]
+									}]
+									properties: {
+										alerts: {
+											items: {
+												properties: {
+													name: {
+														type: "string"
+													}
+													providerRef: {
+														properties: {
+															name: {
+																type: "string"
+															}
+															namespace: {
+																type: "string"
+															}
+														}
+														required: ["name"]
+														type: "object"
+													}
+													severity: {
+														enum: ["", "info", "warn", "error"]
+														type: "string"
+													}
+												}
+												required: ["providerRef", "name"]
+												type: "object"
+											}
+											type: "array"
+										}
+										canaryReadyThreshold: {
+											type: "number"
+										}
+										interval: {
+											pattern: "^[0-9]+(m|s)"
+											type:    "string"
+										}
+										iterations: {
+											type: "number"
+										}
+										match: {
+											items: {
+												properties: {
+													headers: {
+														additionalProperties: {
+															oneOf: [{
+																required: ["exact"]
+															}, {
+																required: ["prefix"]
+															}, {
+																required: ["suffix"]
+															}, {
+																required: ["regex"]
+															}]
+															properties: {
+																exact: {
+																	format: "string"
+																	type:   "string"
+																}
+																prefix: {
+																	format: "string"
+																	type:   "string"
+																}
+																regex: {
+																	format: "string"
+																	type:   "string"
+																}
+																suffix: {
+																	format: "string"
+																	type:   "string"
+																}
+															}
+															type: "object"
+														}
+														type: "object"
+													}
+													queryParams: {
+														additionalProperties: {
+															oneOf: [{
+																not: {
+																	anyOf: [{
+																		required: ["exact"]
+																	}, {
+																		required: ["prefix"]
+																	}, {
+																		required: ["regex"]
+																	}]
+																}
+															}, {
+																required: ["exact"]
+															}, {
+																required: ["prefix"]
+															}, {
+																required: ["regex"]
+															}]
+															properties: {
+																exact: {
+																	type: "string"
+																}
+																prefix: {
+																	type: "string"
+																}
+																regex: {
+																	type: "string"
+																}
+															}
+															type: "object"
+														}
+														type: "object"
+													}
+													sourceLabels: {
+														additionalProperties: {
+															format: "string"
+															type:   "string"
+														}
+														type: "object"
+													}
+												}
+												type: "object"
+											}
+											type: "array"
+										}
+										maxWeight: {
+											type: "number"
+										}
+										metrics: {
+											items: {
+												properties: {
+													interval: {
+														pattern: "^[0-9]+(m|s)"
+														type:    "string"
+													}
+													name: {
+														type: "string"
+													}
+													query: {
+														type: "string"
+													}
+													templateRef: {
+														properties: {
+															name: {
+																type: "string"
+															}
+															namespace: {
+																type: "string"
+															}
+														}
+														required: ["name"]
+														type: "object"
+													}
+													templateVariables: {
+														additionalProperties: {
+															type: "string"
+														}
+														type: "object"
+													}
+													threshold: {
+														type: "number"
+													}
+													thresholdRange: {
+														properties: {
+															max: {
+																type: "number"
+															}
+															min: {
+																type: "number"
+															}
+														}
+														type: "object"
+													}
+												}
+												required: ["name"]
+												type: "object"
+											}
+											type: "array"
+										}
+										mirror: {
+											type: "boolean"
+										}
+										mirrorWeight: {
+											type: "number"
+										}
+										primaryReadyThreshold: {
+											type: "number"
+										}
+										sessionAffinity: {
+											properties: {
+												cookieName: {
+													type: "string"
+												}
+												maxAge: {
+													default: 86400
+													type:    "number"
+												}
+											}
+											required: ["cookieName"]
+											type: "object"
+										}
+										stepWeight: {
+											type: "number"
+										}
+										stepWeightPromotion: {
+											type: "number"
+										}
+										stepWeights: {
+											items: {
+												type: "number"
+											}
+											type: "array"
+										}
+										threshold: {
+											type: "number"
+										}
+										webhooks: {
+											items: {
+												properties: {
+													metadata: {
+														additionalProperties: {
+															type: "string"
+														}
+														type: "object"
+													}
+													muteAlert: {
+														type: "boolean"
+													}
+													name: {
+														type: "string"
+													}
+													retries: {
+														type: "number"
+													}
+													timeout: {
+														pattern: "^[0-9]+(m|s)"
+														type:    "string"
+													}
+													type: {
+														enum: ["", "confirm-rollout", "pre-rollout", "rollout", "confirm-promotion", "post-rollout", "event", "rollback", "confirm-traffic-increase"]
+														type: "string"
+													}
+													url: {
+														format: "url"
+														type:   "string"
+													}
+												}
+												required: ["name", "url"]
+												type: "object"
+											}
+											type: "array"
+										}
+									}
+									type: "object"
+								}
+								autoscalerRef: {
+									properties: {
+										apiVersion: {
+											type: "string"
+										}
+										kind: {
+											enum: ["HorizontalPodAutoscaler", "ScaledObject"]
+											type: "string"
+										}
+										name: {
+											type: "string"
+										}
+										primaryScalerQueries: {
+											additionalProperties: {
+												type: "string"
+											}
+											type: "object"
+										}
+										primaryScalerReplicas: {
+											properties: {
+												maxReplicas: {
+													type: "number"
+												}
+												minReplicas: {
+													type: "number"
+												}
+											}
+											type: "object"
+										}
+									}
+									required: ["apiVersion", "kind", "name"]
+									type: "object"
+								}
+								ingressRef: {
+									properties: {
+										apiVersion: {
+											type: "string"
+										}
+										kind: {
+											enum: ["Ingress"]
+											type: "string"
+										}
+										name: {
+											type: "string"
+										}
+									}
+									required: ["apiVersion", "kind", "name"]
+									type: "object"
+								}
+								metricsServer: {
+									type: "string"
+								}
+								progressDeadlineSeconds: {
+									type: "number"
+								}
+								provider: {
+									type: "string"
+								}
+								revertOnDeletion: {
+									type: "boolean"
+								}
+								routeRef: {
+									properties: {
+										apiVersion: {
+											type: "string"
+										}
+										kind: {
+											enum: ["ApisixRoute"]
+											type: "string"
+										}
+										name: {
+											type: "string"
+										}
+									}
+									required: ["apiVersion", "kind", "name"]
+									type: "object"
+								}
+								service: {
+									properties: {
+										apex: {
+											properties: {
+												annotations: {
+													additionalProperties: {
+														type: "string"
+													}
+													type: "object"
+												}
+												labels: {
+													additionalProperties: {
+														type: "string"
+													}
+													type: "object"
+												}
+											}
+											type: "object"
+										}
+										appProtocol: {
+											type: "string"
+										}
+										backends: {
+											items: {
+												type: "string"
+											}
+											type: "array"
+										}
+										canary: {
+											properties: {
+												annotations: {
+													additionalProperties: {
+														type: "string"
+													}
+													type: "object"
+												}
+												labels: {
+													additionalProperties: {
+														type: "string"
+													}
+													type: "object"
+												}
+											}
+											type: "object"
+										}
+										corsPolicy: {
+											properties: {
+												allowCredentials: {
+													type: "boolean"
+												}
+												allowHeaders: {
+													items: {
+														format: "string"
+														type:   "string"
+													}
+													type: "array"
+												}
+												allowMethods: {
+													items: {
+														format: "string"
+														type:   "string"
+													}
+													type: "array"
+												}
+												allowOrigin: {
+													items: {
+														format: "string"
+														type:   "string"
+													}
+													type: "array"
+												}
+												allowOrigins: {
+													items: {
+														oneOf: [{
+															required: ["exact"]
+														}, {
+															required: ["prefix"]
+														}, {
+															required: ["regex"]
+														}]
+														properties: {
+															exact: {
+																format: "string"
+																type:   "string"
+															}
+															prefix: {
+																format: "string"
+																type:   "string"
+															}
+															regex: {
+																format: "string"
+																type:   "string"
+															}
+														}
+														type: "object"
+													}
+													type: "array"
+												}
+												exposeHeaders: {
+													items: {
+														format: "string"
+														type:   "string"
+													}
+													type: "array"
+												}
+												maxAge: {
+													type: "string"
+												}
+											}
+											type: "object"
+										}
+										delegation: {
+											type: "boolean"
+										}
+										gatewayRefs: {
+											items: {
+												properties: {
+													group: {
+														default:   "gateway.networking.k8s.io"
+														maxLength: 253
+														pattern:   "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+														type:      "string"
+													}
+													kind: {
+														default:   "Gateway"
+														maxLength: 63
+														minLength: 1
+														pattern:   "^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$"
+														type:      "string"
+													}
+													name: {
+														maxLength: 253
+														minLength: 1
+														type:      "string"
+													}
+													namespace: {
+														maxLength: 63
+														minLength: 1
+														pattern:   "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+														type:      "string"
+													}
+													port: {
+														format:  "int32"
+														maximum: 65535
+														minimum: 1
+														type:    "integer"
+													}
+													sectionName: {
+														maxLength: 253
+														minLength: 1
+														pattern:   "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+														type:      "string"
+													}
+												}
+												required: ["name"]
+												type: "object"
+											}
+											maxItems: 32
+											type:     "array"
+										}
+										gateways: {
+											items: {
+												type: "string"
+											}
+											type: "array"
+										}
+										headers: {
+											properties: {
+												request: {
+													properties: {
+														add: {
+															additionalProperties: {
+																format: "string"
+																type:   "string"
+															}
+															type: "object"
+														}
+														remove: {
+															items: {
+																format: "string"
+																type:   "string"
+															}
+															type: "array"
+														}
+														set: {
+															additionalProperties: {
+																format: "string"
+																type:   "string"
+															}
+															type: "object"
+														}
+													}
+													type: "object"
+												}
+												response: {
+													properties: {
+														add: {
+															additionalProperties: {
+																format: "string"
+																type:   "string"
+															}
+															type: "object"
+														}
+														remove: {
+															items: {
+																format: "string"
+																type:   "string"
+															}
+															type: "array"
+														}
+														set: {
+															additionalProperties: {
+																format: "string"
+																type:   "string"
+															}
+															type: "object"
+														}
+													}
+													type: "object"
+												}
+											}
+											type: "object"
+										}
+										hosts: {
+											items: {
+												type: "string"
+											}
+											type: "array"
+										}
+										match: {
+											items: {
+												properties: {
+													authority: {
+														oneOf: [{
+															not: {
+																anyOf: [{
+																	required: ["exact"]
+																}, {
+																	required: ["prefix"]
+																}, {
+																	required: ["regex"]
+																}]
+															}
+														}, {
+															required: ["exact"]
+														}, {
+															required: ["prefix"]
+														}, {
+															required: ["regex"]
+														}]
+														properties: {
+															exact: {
+																format: "string"
+																type:   "string"
+															}
+															prefix: {
+																format: "string"
+																type:   "string"
+															}
+															regex: {
+																format: "string"
+																type:   "string"
+															}
+														}
+														type: "object"
+													}
+													gateways: {
+														items: {
+															format: "string"
+															type:   "string"
+														}
+														type: "array"
+													}
+													headers: {
+														additionalProperties: {
+															oneOf: [{
+																not: {
+																	anyOf: [{
+																		required: ["exact"]
+																	}, {
+																		required: ["prefix"]
+																	}, {
+																		required: ["regex"]
+																	}]
+																}
+															}, {
+																required: ["exact"]
+															}, {
+																required: ["prefix"]
+															}, {
+																required: ["regex"]
+															}]
+															properties: {
+																exact: {
+																	format: "string"
+																	type:   "string"
+																}
+																prefix: {
+																	format: "string"
+																	type:   "string"
+																}
+																regex: {
+																	format: "string"
+																	type:   "string"
+																}
+															}
+															type: "object"
+														}
+														type: "object"
+													}
+													ignoreUriCase: {
+														type: "boolean"
+													}
+													method: {
+														oneOf: [{
+															not: {
+																anyOf: [{
+																	required: ["exact"]
+																}, {
+																	required: ["prefix"]
+																}, {
+																	required: ["regex"]
+																}]
+															}
+														}, {
+															required: ["exact"]
+														}, {
+															required: ["prefix"]
+														}, {
+															required: ["regex"]
+														}]
+														properties: {
+															exact: {
+																format: "string"
+																type:   "string"
+															}
+															prefix: {
+																format: "string"
+																type:   "string"
+															}
+															regex: {
+																format: "string"
+																type:   "string"
+															}
+														}
+														type: "object"
+													}
+													name: {
+														format: "string"
+														type:   "string"
+													}
+													port: {
+														type: "integer"
+													}
+													queryParams: {
+														additionalProperties: {
+															oneOf: [{
+																not: {
+																	anyOf: [{
+																		required: ["exact"]
+																	}, {
+																		required: ["prefix"]
+																	}, {
+																		required: ["regex"]
+																	}]
+																}
+															}, {
+																required: ["exact"]
+															}, {
+																required: ["prefix"]
+															}, {
+																required: ["regex"]
+															}]
+															properties: {
+																exact: {
+																	format: "string"
+																	type:   "string"
+																}
+																prefix: {
+																	format: "string"
+																	type:   "string"
+																}
+																regex: {
+																	format: "string"
+																	type:   "string"
+																}
+															}
+															type: "object"
+														}
+														type: "object"
+													}
+													scheme: {
+														oneOf: [{
+															not: {
+																anyOf: [{
+																	required: ["exact"]
+																}, {
+																	required: ["prefix"]
+																}, {
+																	required: ["regex"]
+																}]
+															}
+														}, {
+															required: ["exact"]
+														}, {
+															required: ["prefix"]
+														}, {
+															required: ["regex"]
+														}]
+														properties: {
+															exact: {
+																format: "string"
+																type:   "string"
+															}
+															prefix: {
+																format: "string"
+																type:   "string"
+															}
+															regex: {
+																format: "string"
+																type:   "string"
+															}
+														}
+														type: "object"
+													}
+													sourceLabels: {
+														additionalProperties: {
+															format: "string"
+															type:   "string"
+														}
+														type: "object"
+													}
+													sourceNamespace: {
+														format: "string"
+														type:   "string"
+													}
+													uri: {
+														oneOf: [{
+															not: {
+																anyOf: [{
+																	required: ["exact"]
+																}, {
+																	required: ["prefix"]
+																}, {
+																	required: ["regex"]
+																}]
+															}
+														}, {
+															required: ["exact"]
+														}, {
+															required: ["prefix"]
+														}, {
+															required: ["regex"]
+														}]
+														properties: {
+															exact: {
+																format: "string"
+																type:   "string"
+															}
+															prefix: {
+																format: "string"
+																type:   "string"
+															}
+															regex: {
+																format: "string"
+																type:   "string"
+															}
+														}
+														type: "object"
+													}
+													withoutHeaders: {
+														additionalProperties: {
+															oneOf: [{
+																not: {
+																	anyOf: [{
+																		required: ["exact"]
+																	}, {
+																		required: ["prefix"]
+																	}, {
+																		required: ["regex"]
+																	}]
+																}
+															}, {
+																required: ["exact"]
+															}, {
+																required: ["prefix"]
+															}, {
+																required: ["regex"]
+															}]
+															properties: {
+																exact: {
+																	format: "string"
+																	type:   "string"
+																}
+																prefix: {
+																	format: "string"
+																	type:   "string"
+																}
+																regex: {
+																	format: "string"
+																	type:   "string"
+																}
+															}
+															type: "object"
+														}
+														type: "object"
+													}
+												}
+												type: "object"
+											}
+											type: "array"
+										}
+										meshName: {
+											type: "string"
+										}
+										mirror: {
+											items: {
+												properties: {
+													backendRef: {
+														properties: {
+															group: {
+																default:   ""
+																maxLength: 253
+																pattern:   "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+																type:      "string"
+															}
+															kind: {
+																default:   "Service"
+																maxLength: 63
+																minLength: 1
+																pattern:   "^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$"
+																type:      "string"
+															}
+															name: {
+																maxLength: 253
+																minLength: 1
+																type:      "string"
+															}
+															namespace: {
+																maxLength: 63
+																minLength: 1
+																pattern:   "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+																type:      "string"
+															}
+															port: {
+																format:  "int32"
+																maximum: 65535
+																minimum: 1
+																type:    "integer"
+															}
+														}
+														required: ["name"]
+														type: "object"
+														"x-kubernetes-validations": [{
+															message: "Must have port for Service reference"
+															rule:    "(size(self.group) == 0 && self.kind == 'Service') ? has(self.port) : true"
+														}]
+													}
+												}
+												type: "object"
+											}
+											required: ["backendRef"]
+											type: "array"
+										}
+										name: {
+											type: "string"
+										}
+										port: {
+											type: "number"
+										}
+										portDiscovery: {
+											type: "boolean"
+										}
+										portName: {
+											type: "string"
+										}
+										primary: {
+											properties: {
+												annotations: {
+													additionalProperties: {
+														type: "string"
+													}
+													type: "object"
+												}
+												labels: {
+													additionalProperties: {
+														type: "string"
+													}
+													type: "object"
+												}
+											}
+											type: "object"
+										}
+										retries: {
+											properties: {
+												attempts: {
+													format: "int32"
+													type:   "integer"
+												}
+												perTryTimeout: {
+													type: "string"
+												}
+												retryOn: {
+													format: "string"
+													type:   "string"
+												}
+											}
+											type: "object"
+										}
+										rewrite: {
+											properties: {
+												authority: {
+													format: "string"
+													type:   "string"
+												}
+												type: {
+													format: "string"
+													type:   "string"
+												}
+												uri: {
+													format: "string"
+													type:   "string"
+												}
+											}
+											type: "object"
+										}
+										targetPort: {
+											"x-kubernetes-int-or-string": true
+										}
+										timeout: {
+											type: "string"
+										}
+										trafficPolicy: {
+											properties: {
+												connectionPool: {
+													properties: {
+														http: {
+															properties: {
+																h2UpgradePolicy: {
+																	enum: ["DEFAULT", "DO_NOT_UPGRADE", "UPGRADE"]
+																	type: "string"
+																}
+																http1MaxPendingRequests: {
+																	format: "int32"
+																	type:   "integer"
+																}
+																http2MaxRequests: {
+																	format: "int32"
+																	type:   "integer"
+																}
+																idleTimeout: {
+																	type: "string"
+																}
+																maxRequestsPerConnection: {
+																	format: "int32"
+																	type:   "integer"
+																}
+																maxRetries: {
+																	format: "int32"
+																	type:   "integer"
+																}
+															}
+															type: "object"
+														}
+													}
+													type: "object"
+												}
+												loadBalancer: {
+													oneOf: [{
+														required: ["simple"]
+													}, {
+														properties: {
+															consistentHash: {
+																oneOf: [{
+																	required: ["httpHeaderName"]
+																}, {
+																	required: ["httpCookie"]
+																}, {
+																	required: ["useSourceIp"]
+																}, {
+																	required: ["httpQueryParameterName"]
+																}]
+															}
+														}
+														required: ["consistentHash"]
+													}]
+													properties: {
+														consistentHash: {
+															properties: {
+																httpCookie: {
+																	properties: {
+																		name: {
+																			format: "string"
+																			type:   "string"
+																		}
+																		path: {
+																			format: "string"
+																			type:   "string"
+																		}
+																		ttl: {
+																			type: "string"
+																		}
+																	}
+																	type: "object"
+																}
+																httpHeaderName: {
+																	format: "string"
+																	type:   "string"
+																}
+																httpQueryParameterName: {
+																	format: "string"
+																	type:   "string"
+																}
+																minimumRingSize: {
+																	type: "integer"
+																}
+																useSourceIp: {
+																	type: "boolean"
+																}
+															}
+															type: "object"
+														}
+														localityLbSetting: {
+															properties: {
+																distribute: {
+																	items: {
+																		properties: {
+																			from: {
+																				format: "string"
+																				type:   "string"
+																			}
+																			to: {
+																				additionalProperties: {
+																					type: "integer"
+																				}
+																				type: "object"
+																			}
+																		}
+																		type: "object"
+																	}
+																	type: "array"
+																}
+																enabled: {
+																	type: "boolean"
+																}
+																failover: {
+																	items: {
+																		properties: {
+																			from: {
+																				format: "string"
+																				type:   "string"
+																			}
+																			to: {
+																				format: "string"
+																				type:   "string"
+																			}
+																		}
+																		type: "object"
+																	}
+																	type: "array"
+																}
+															}
+															type: "object"
+														}
+														simple: {
+															enum: ["ROUND_ROBIN", "LEAST_CONN", "RANDOM", "PASSTHROUGH", "LEAST_REQUEST"]
+															type: "string"
+														}
+														warmupDurationSecs: {
+															type: "string"
+														}
+													}
+													type: "object"
+												}
+												outlierDetection: {
+													properties: {
+														baseEjectionTime: {
+															type: "string"
+														}
+														consecutive5xxErrors: {
+															type: "integer"
+														}
+														consecutiveErrors: {
+															format: "int32"
+															type:   "integer"
+														}
+														consecutiveGatewayErrors: {
+															format: "int32"
+															type:   "integer"
+														}
+														interval: {
+															type: "string"
+														}
+														maxEjectionPercent: {
+															format: "int32"
+															type:   "integer"
+														}
+														minHealthPercent: {
+															format: "int32"
+															type:   "integer"
+														}
+													}
+													type: "object"
+												}
+												tls: {
+													properties: {
+														caCertificates: {
+															format: "string"
+															type:   "string"
+														}
+														clientCertificate: {
+															format: "string"
+															type:   "string"
+														}
+														mode: {
+															enum: ["DISABLE", "SIMPLE", "MUTUAL", "ISTIO_MUTUAL"]
+															type: "string"
+														}
+														privateKey: {
+															format: "string"
+															type:   "string"
+														}
+														sni: {
+															format: "string"
+															type:   "string"
+														}
+														subjectAltNames: {
+															items: {
+																format: "string"
+																type:   "string"
+															}
+															type: "array"
+														}
+													}
+													type: "object"
+												}
+											}
+											type: "object"
+										}
+									}
+									required: ["port"]
+									type: "object"
+								}
+								skipAnalysis: {
+									type: "boolean"
+								}
+								suspend: {
+									type: "boolean"
+								}
+								targetRef: {
+									properties: {
+										apiVersion: {
+											type: "string"
+										}
+										kind: {
+											enum: ["DaemonSet", "Deployment", "Service"]
+											type: "string"
+										}
+										name: {
+											type: "string"
+										}
+									}
+									required: ["apiVersion", "kind", "name"]
+									type: "object"
+								}
+								upstreamRef: {
+									properties: {
+										apiVersion: {
+											type: "string"
+										}
+										kind: {
+											enum: ["Upstream"]
+											type: "string"
+										}
+										name: {
+											type: "string"
+										}
+										namespace: {
+											type: "string"
+										}
+									}
+									required: ["apiVersion", "kind", "name"]
+									type: "object"
+								}
+							}
+							required: ["targetRef", "service", "analysis"]
+							type: "object"
+						}
+						status: {
+							properties: {
+								canaryWeight: {
+									type: "number"
+								}
+								conditions: {
+									items: {
+										properties: {
+											lastTransitionTime: {
+												format: "date-time"
+												type:   "string"
+											}
+											lastUpdateTime: {
+												format: "date-time"
+												type:   "string"
+											}
+											message: {
+												type: "string"
+											}
+											reason: {
+												type: "string"
+											}
+											status: {
+												type: "string"
+											}
+											type: {
+												type: "string"
+											}
+										}
+										required: ["type", "status", "reason"]
+										type: "object"
+									}
+									type: "array"
+								}
+								failedChecks: {
+									type: "number"
+								}
+								iterations: {
+									type: "number"
+								}
+								lastAppliedSpec: {
+									type: "string"
+								}
+								lastPromotedSpec: {
+									type: "string"
+								}
+								lastTransitionTime: {
+									format: "date-time"
+									type:   "string"
+								}
+								phase: {
+									enum: ["", "Initializing", "Initialized", "Waiting", "Progressing", "WaitingPromotion", "Promoting", "Finalising", "Succeeded", "Failed", "Terminating", "Terminated"]
+									type: "string"
+								}
+								previousSessionAffinityCookie: {
+									type: "string"
+								}
+								sessionAffinityCookie: {
+									type: "string"
+								}
+								trackedConfigs: {
+									additionalProperties: {
+										type: "string"
+									}
+									type: "object"
+								}
+							}
+							type: "object"
+						}
+					}
+					type: "object"
+				}
+			}
+			subresources: {
+				status: {}
+			}
+		}]
+	}
+}

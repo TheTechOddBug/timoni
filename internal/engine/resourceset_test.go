@@ -100,6 +100,26 @@ func TestGetResources_IntegralFloat(t *testing.T) {
 	g.Expect(sets[0].Objects[0].Object["replicas"]).To(BeEquivalentTo(int64(1)))
 }
 
+func TestGetResources_DefaultedFloat(t *testing.T) {
+	g := NewWithT(t)
+	ctx := cuecontext.New()
+
+	value := ctx.CompileString(`app: [{
+		apiVersion: "v1"
+		kind:       "ConfigMap"
+		metadata: name: "test"
+		replicas: *1.0 | number
+		ratio:    *0.5 | number
+	}]`)
+	g.Expect(value.Err()).ToNot(HaveOccurred())
+
+	sets, err := GetResources(value)
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(sets[0].Objects).To(HaveLen(1))
+	g.Expect(sets[0].Objects[0].Object["replicas"]).To(BeEquivalentTo(int64(1)))
+	g.Expect(sets[0].Objects[0].Object["ratio"]).To(BeEquivalentTo(float64(0.5)))
+}
+
 func TestGetResources_EmptyList(t *testing.T) {
 	g := NewWithT(t)
 	ctx := cuecontext.New()

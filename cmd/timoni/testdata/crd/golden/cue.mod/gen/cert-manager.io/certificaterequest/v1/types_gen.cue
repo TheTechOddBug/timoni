@@ -111,3 +111,153 @@ import "strings"
 	// Populated by the cert-manager webhook on creation and immutable.
 	username?: string
 }
+
+// Original CRD used by 'timoni mod vet' for validation.
+_crd: {
+	apiVersion: "apiextensions.k8s.io/v1"
+	kind:       "CustomResourceDefinition"
+	metadata: {
+		name: "certificaterequests.cert-manager.io"
+	}
+	spec: {
+		group: "cert-manager.io"
+		names: {
+			categories: ["cert-manager"]
+			kind:     "CertificateRequest"
+			listKind: "CertificateRequestList"
+			plural:   "certificaterequests"
+			shortNames: ["cr", "crs"]
+			singular: "certificaterequest"
+		}
+		scope: "Namespaced"
+		versions: [{
+			name:    "v1"
+			served:  true
+			storage: true
+			schema: {
+				openAPIV3Schema: {
+					properties: {
+						apiVersion: {
+							type: "string"
+						}
+						kind: {
+							type: "string"
+						}
+						metadata: {
+							type: "object"
+						}
+						spec: {
+							properties: {
+								duration: {
+									type: "string"
+								}
+								extra: {
+									additionalProperties: {
+										items: {
+											type: "string"
+										}
+										type: "array"
+									}
+									type: "object"
+								}
+								groups: {
+									items: {
+										type: "string"
+									}
+									type:                     "array"
+									"x-kubernetes-list-type": "atomic"
+								}
+								isCA: {
+									type: "boolean"
+								}
+								issuerRef: {
+									properties: {
+										group: {
+											type: "string"
+										}
+										kind: {
+											type: "string"
+										}
+										name: {
+											type: "string"
+										}
+									}
+									required: ["name"]
+									type: "object"
+								}
+								request: {
+									format: "byte"
+									type:   "string"
+								}
+								uid: {
+									type: "string"
+								}
+								usages: {
+									items: {
+										enum: ["signing", "digital signature", "content commitment", "key encipherment", "key agreement", "data encipherment", "cert sign", "crl sign", "encipher only", "decipher only", "any", "server auth", "client auth", "code signing", "email protection", "s/mime", "ipsec end system", "ipsec tunnel", "ipsec user", "timestamping", "ocsp signing", "microsoft sgc", "netscape sgc"]
+										type: "string"
+									}
+									type: "array"
+								}
+								username: {
+									type: "string"
+								}
+							}
+							required: ["issuerRef", "request"]
+							type: "object"
+						}
+						status: {
+							properties: {
+								ca: {
+									format: "byte"
+									type:   "string"
+								}
+								certificate: {
+									format: "byte"
+									type:   "string"
+								}
+								conditions: {
+									items: {
+										properties: {
+											lastTransitionTime: {
+												format: "date-time"
+												type:   "string"
+											}
+											message: {
+												type: "string"
+											}
+											reason: {
+												type: "string"
+											}
+											status: {
+												enum: ["True", "False", "Unknown"]
+												type: "string"
+											}
+											type: {
+												type: "string"
+											}
+										}
+										required: ["status", "type"]
+										type: "object"
+									}
+									type: "array"
+									"x-kubernetes-list-map-keys": ["type"]
+									"x-kubernetes-list-type": "map"
+								}
+								failureTime: {
+									format: "date-time"
+									type:   "string"
+								}
+							}
+							type: "object"
+						}
+					}
+					type: "object"
+				}
+			}
+			subresources: {
+				status: {}
+			}
+		}]
+	}
+}

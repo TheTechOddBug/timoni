@@ -31,7 +31,6 @@ import (
 	ssautil "github.com/fluxcd/pkg/ssa/utils"
 	"github.com/hashicorp/go-cleanhttp"
 	"github.com/spf13/cobra"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
 	"github.com/stefanprodan/timoni/internal/engine"
@@ -122,10 +121,7 @@ func runVendorCrdCmd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("parsing CRDs failed: %w", err)
 	}
 	for _, object := range objects {
-		if object.GetKind() == "CustomResourceDefinition" {
-			if err := removeCRDStatusSchema(object); err != nil {
-				return err
-			}
+		if engine.IsCRD(object) {
 			builder.WriteString("---\n")
 			data, err := yaml.Marshal(object)
 			if err != nil {
@@ -212,29 +208,4 @@ func readRemoteCRDManifest(ctx context.Context, client *http.Client, url string,
 	}
 
 	return data, nil
-}
-
-// removeCRDStatusSchema removes the read-only status field from each version.
-func removeCRDStatusSchema(crd *unstructured.Unstructured) error {
-	versions, found, err := unstructured.NestedSlice(crd.Object, "spec", "versions")
-	if err != nil {
-		return fmt.Errorf("reading CRD spec.versions failed: %w", err)
-	}
-	if !found {
-		return nil
-	}
-
-	for i := range versions {
-		version, ok := versions[i].(map[string]any)
-		if !ok {
-			return fmt.Errorf("CRD spec.versions[%d] must be an object", i)
-		}
-		unstructured.RemoveNestedField(version, "schema", "openAPIV3Schema", "properties", "status")
-	}
-
-	if err := unstructured.SetNestedSlice(crd.Object, versions, "spec", "versions"); err != nil {
-		return fmt.Errorf("mutating versions in CRD failed: %w", err)
-	}
-
-	return nil
 }

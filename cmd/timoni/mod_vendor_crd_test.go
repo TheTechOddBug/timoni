@@ -31,7 +31,6 @@ import (
 	"github.com/mattn/go-shellwords"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/types"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestReadRemoteCRDManifestAcceptsBodyAtLimit(t *testing.T) {
@@ -129,72 +128,6 @@ func TestReadRemoteCRDManifestRejectsInsecureRedirect(t *testing.T) {
 	_, err := readRemoteCRDManifest(context.Background(), secure.Client(), secure.URL, 4)
 
 	g.Expect(err).To(MatchError(ContainSubstring("redirect to insecure HTTP")))
-}
-
-func TestRemoveCRDStatusSchema(t *testing.T) {
-	tests := []struct {
-		name     string
-		versions any
-		wantErr  string
-	}{
-		{
-			name:     "non-object version",
-			versions: []any{"v1"},
-			wantErr:  "spec.versions[0] must be an object",
-		},
-		{
-			name:     "non-list versions",
-			versions: "v1",
-			wantErr:  "reading CRD spec.versions failed",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-			crd := &unstructured.Unstructured{Object: map[string]any{
-				"spec": map[string]any{"versions": tt.versions},
-			}}
-
-			err := removeCRDStatusSchema(crd)
-
-			g.Expect(err).To(MatchError(ContainSubstring(tt.wantErr)))
-		})
-	}
-}
-
-func TestRemoveCRDStatusSchemaPreservesOtherFields(t *testing.T) {
-	g := NewWithT(t)
-	crd := &unstructured.Unstructured{Object: map[string]any{
-		"spec": map[string]any{
-			"versions": []any{
-				map[string]any{
-					"name": "v1",
-					"schema": map[string]any{
-						"openAPIV3Schema": map[string]any{
-							"properties": map[string]any{
-								"spec":   map[string]any{"type": "object"},
-								"status": map[string]any{"type": "object"},
-							},
-						},
-					},
-				},
-			},
-		},
-	}}
-
-	err := removeCRDStatusSchema(crd)
-
-	g.Expect(err).ToNot(HaveOccurred())
-	versions, found, err := unstructured.NestedSlice(crd.Object, "spec", "versions")
-	g.Expect(err).ToNot(HaveOccurred())
-	g.Expect(found).To(BeTrue())
-	version := versions[0].(map[string]any)
-	properties, found, err := unstructured.NestedMap(version, "schema", "openAPIV3Schema", "properties")
-	g.Expect(err).ToNot(HaveOccurred())
-	g.Expect(found).To(BeTrue())
-	g.Expect(properties).To(HaveKey("spec"))
-	g.Expect(properties).ToNot(HaveKey("status"))
 }
 
 func TestVendorCrd(t *testing.T) {
