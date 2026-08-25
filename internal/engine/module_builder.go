@@ -26,6 +26,7 @@ import (
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/ast"
+	"cuelang.org/go/cue/build"
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/load"
 
@@ -53,6 +54,7 @@ type ModuleBuilder struct {
 	moduleVersion string
 	kubeVersion   string
 	overlays      map[string]string
+	instance      *build.Instance
 }
 
 // NewModuleBuilder creates a ModuleBuilder for the given module and package.
@@ -189,6 +191,7 @@ func (b *ModuleBuilder) Build(tags ...string) (cue.Value, error) {
 		}
 	}
 
+	b.instance = nil
 	modInstances := load.Instances([]string{}, cfg)
 	if len(modInstances) == 0 {
 		return value, errors.New("no instances found")
@@ -203,6 +206,7 @@ func (b *ModuleBuilder) Build(tags ...string) (cue.Value, error) {
 	if modValue.Err() != nil {
 		return value, modValue.Err()
 	}
+	b.instance = modInstance
 
 	// Extract the Timoni instance from the build value.
 	instance := modValue.LookupPath(cue.ParsePath(apiv1.InstanceSelector.String()))
@@ -216,6 +220,56 @@ func (b *ModuleBuilder) Build(tags ...string) (cue.Value, error) {
 	}
 
 	return modValue, nil
+}
+
+// ModuleImport is a CUE package imported by a module.
+type ModuleImport struct {
+	// Path is the import path of the package.
+	Path string
+	// Value is the compiled package.
+	Value cue.Value
+}
+
+// GetImports returns the CUE packages imported, directly or transitively,
+// by the module package compiled with Build.
+func (b *ModuleBuilder) GetImports() ([]ModuleImport, error) {
+	if b.instance == nil {
+		return nil, errors.New("module not built")
+	}
+
+	var values []ModuleImport
+	seen := make(map[string]bool)
+	var walk func(inst *build.Instance) error
+	walk = func(inst *build.Instance) error {
+		for _, imp := range inst.Imports {
+			if seen[imp.ImportPath] {
+				continue
+			}
+			seen[imp.ImportPath] = true
+			if imp.Err != nil {
+				return fmt.Errorf("import %s failed: %w", imp.ImportPath, imp.Err)
+			}
+			if len(imp.Files) == 0 {
+				continue
+			}
+
+			value := b.ctx.BuildInstance(imp)
+			if value.Err() != nil {
+				return fmt.Errorf("building import %s failed: %w", imp.ImportPath, value.Err())
+			}
+			values = append(values, ModuleImport{Path: imp.ImportPath, Value: value})
+
+			if err := walk(imp); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err := walk(b.instance); err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 // GetAPIVersion returns the list of API version of the Timoni's CUE definition.

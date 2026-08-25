@@ -176,8 +176,10 @@ func needsYAMLDecoding(value cue.Value) bool {
 		if found {
 			return false
 		}
-		switch v.Kind() {
-		case cue.BytesKind, cue.FloatKind:
+		// Resolve the default of disjunctions such as '*1.0 | number',
+		// whose concrete kind is unknown before defaulting.
+		v, _ = v.Default()
+		if v.IncompleteKind()&(cue.BytesKind|cue.FloatKind) != 0 {
 			found = true
 			return false
 		}

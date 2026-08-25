@@ -62,3 +62,84 @@ import "strings"
 	// Query of this metric template
 	query!: string
 }
+
+// Original CRD used by 'timoni mod vet' for validation.
+_crd: {
+	apiVersion: "apiextensions.k8s.io/v1"
+	kind:       "CustomResourceDefinition"
+	metadata: {
+		name: "metrictemplates.flagger.app"
+	}
+	spec: {
+		group: "flagger.app"
+		names: {
+			categories: ["all"]
+			kind:     "MetricTemplate"
+			listKind: "MetricTemplateList"
+			plural:   "metrictemplates"
+			singular: "metrictemplate"
+		}
+		scope: "Namespaced"
+		versions: [{
+			name:    "v1beta1"
+			served:  true
+			storage: true
+			schema: {
+				openAPIV3Schema: {
+					properties: {
+						apiVersion: {
+							type: "string"
+						}
+						kind: {
+							type: "string"
+						}
+						metadata: {
+							type: "object"
+						}
+						spec: {
+							properties: {
+								provider: {
+									properties: {
+										address: {
+											type: "string"
+										}
+										insecureSkipVerify: {
+											type: "boolean"
+										}
+										region: {
+											type: "string"
+										}
+										secretRef: {
+											properties: {
+												name: {
+													type: "string"
+												}
+											}
+											required: ["name"]
+											type: "object"
+										}
+										type: {
+											enum: ["prometheus", "influxdb", "datadog", "stackdriver", "cloudwatch", "newrelic", "graphite", "dynatrace", "keptn"]
+											type: "string"
+										}
+									}
+									required: ["type"]
+									type: "object"
+								}
+								query: {
+									type: "string"
+								}
+							}
+							required: ["provider", "query"]
+							type: "object"
+						}
+					}
+					type: "object"
+				}
+			}
+			subresources: {
+				status: {}
+			}
+		}]
+	}
+}

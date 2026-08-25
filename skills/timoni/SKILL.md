@@ -6,7 +6,7 @@ metadata:
   author: Stefan Prodan
   homepage: https://timoni.sh
   source: https://github.com/stefanprodan/timoni
-  version: "0.1.1"
+  version: "0.1.2"
 ---
 
 # Timoni
@@ -306,8 +306,11 @@ myapp/
 - Embed plain files (configs, scripts) with `@extern(embed)` on the package
   and `@embed(file=...)` on a field.
 - Custom resources: `timoni mod vendor crd -f <crds.yaml>` generates CUE
-  definitions under `cue.mod/gen`; add `timoni: healthChecks:` entries for CRs
-  that are not kstatus-compliant.
+  definitions under `cue.mod/gen` with the CRD schema embedded; `timoni mod vet`
+  validates the module's custom resources against the vendored CRDs and the
+  CRDs rendered by the module with the API server checks (OpenAPI schema,
+  list map/set uniqueness, CEL rules). Add `timoni: healthChecks:` entries for
+  CRs that are not kstatus-compliant.
 - Test jobs: emit Jobs in a final `apply: test:` set with the
   `action.timoni.sh/force: "enabled"` annotation and a checksum of the config
   in the pod template; the Job is recreated when that checksum changes, not on

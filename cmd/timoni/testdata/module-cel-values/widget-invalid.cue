@@ -1,0 +1,3 @@
+values: {
+	minReplicas: 5
+}

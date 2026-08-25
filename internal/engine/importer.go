@@ -17,6 +17,7 @@ limitations under the License.
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -31,6 +32,13 @@ import (
 	"cuelang.org/go/encoding/openapi"
 	"cuelang.org/go/encoding/yaml"
 	"github.com/getkin/kin-openapi/openapi3"
+)
+
+const (
+	// crdField is the hidden field of the generated CUE packages
+	// that holds the original CRD of the version with stripped field description.
+	crdField    = "_crd"
+	crdFieldDoc = "Original CRD used by 'timoni mod vet' for validation."
 )
 
 // Importer generates CUE definitions from Kubernetes CRDs using the OpenAPI v3 spec.
@@ -64,8 +72,16 @@ func (imp *Importer) Generate(crdData []byte) (map[string][]byte, error) {
 			if err != nil {
 				return result, err
 			}
+			content := fmt.Sprintf("%s\n\npackage %s\n\n%s", imp.header, crdVersion.Version, string(def))
+
+			manifest, err := format.Node(crdVersion.CRD.Syntax(cue.Final(), cue.Concrete(true)))
+			if err != nil {
+				return result, err
+			}
+			content += fmt.Sprintf("\n// %s\n%s: %s\n", crdFieldDoc, crdField, string(manifest))
+
 			name := path.Join(crd.Props.Spec.Group, crd.Props.Spec.Names.Singular, crdVersion.Version)
-			result[name] = []byte(fmt.Sprintf("%s\n\npackage %s\n\n%s", imp.header, crdVersion.Version, string(def)))
+			result[name] = []byte(content)
 		}
 	}
 
@@ -142,13 +158,16 @@ type VersionedSchema struct {
 	// The contents of `spec.versions[].schema.openAPIV3Schema`, after conversion of the OpenAPI
 	// schema to native CUE constraints.
 	Schema cue.Value
+	// The CRD manifest reduced to this version.
+	CRD cue.Value
 }
 
 // convertCRD converts a CRD CUE value into naming metadata and versioned CUE
 // schemas, applying supported Kubernetes extensions.
 func convertCRD(crd cue.Value) (*IntermediateCRD, error) {
 	cc := &IntermediateCRD{
-		Schemas: make([]VersionedSchema, 0),
+		Original: crd,
+		Schemas:  make([]VersionedSchema, 0),
 	}
 
 	err := crd.Decode(&cc.Props)
@@ -196,10 +215,17 @@ func convertCRD(crd cue.Value) (*IntermediateCRD, error) {
 		}
 		i++
 
-		doc := shell.FillPath(schpath, val.LookupPath(cue.ParsePath("schema.openAPIV3Schema")))
+		// The read-only status is left out of the CUE definitions.
+		schemaExpr, ok := val.LookupPath(cue.ParsePath("schema.openAPIV3Schema")).Syntax(cue.Final(), cue.Concrete(true)).(ast.Expr)
+		if !ok {
+			return nil, fmt.Errorf("error reading schema for version %s: not an expression", ver)
+		}
+		removeSchemaProperty(schemaExpr, "status")
+		doc := shell.FillPath(schpath, ctx.BuildExpr(schemaExpr))
 		of, err := openapi.Extract(doc, &openapi.Config{})
 		if err != nil {
-			return nil, fmt.Errorf("could not convert schema for version %s to CUE: %w", ver, err)
+			crdName, _ := crd.LookupPath(cue.ParsePath("metadata.name")).String()
+			return nil, fmt.Errorf("crd %s: could not convert schema for version %s to CUE: %w", crdName, ver, err)
 		}
 
 		// first, extract and get the schema handle itself
@@ -346,13 +372,187 @@ func convertCRD(crd cue.Value) (*IntermediateCRD, error) {
 			schast.Decls = append(schast.Decls, statusd)
 		}
 
+		crdManifest, err := versionCRD(ctx, crd, val, ver)
+		if err != nil {
+			crdName, _ := crd.LookupPath(cue.ParsePath("metadata.name")).String()
+			return nil, fmt.Errorf("crd %s: %w", crdName, err)
+		}
+
 		// Then build back to a cue.Value again for the return
 		cc.Schemas = append(cc.Schemas, VersionedSchema{
 			Version: ver,
 			Schema:  ctx.BuildFile(schast),
+			CRD:     crdManifest,
 		})
 	}
 	return cc, nil
+}
+
+// versionCRD returns the CRD manifest reduced to the given version, with the
+// documentation keywords removed from the schema. The schema is compiled with
+// the Kubernetes API server structural schema builder to reject at vendor time
+// the CRDs that cannot be used for validation.
+func versionCRD(ctx *cue.Context, crd, version cue.Value, ver string) (cue.Value, error) {
+	schema := version.LookupPath(cue.ParsePath("schema.openAPIV3Schema"))
+	if !schema.Exists() {
+		return cue.Value{}, fmt.Errorf("version %s has no schema", ver)
+	}
+
+	schemaExpr, ok := schema.Syntax(cue.Final(), cue.Concrete(true)).(ast.Expr)
+	if !ok {
+		return cue.Value{}, fmt.Errorf("error encoding schema for version %s: not an expression", ver)
+	}
+	pruneSchemaDocs(schemaExpr, false)
+	prunedSchema := ctx.BuildExpr(schemaExpr)
+
+	data, err := prunedSchema.MarshalJSON()
+	if err != nil {
+		return cue.Value{}, fmt.Errorf("error encoding schema for version %s: %w", ver, err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return cue.Value{}, fmt.Errorf("error decoding schema for version %s: %w", ver, err)
+	}
+	if _, _, err := newStructuralSchema(raw); err != nil {
+		return cue.Value{}, fmt.Errorf("invalid schema for version %s: %w", ver, err)
+	}
+
+	name, err := crd.LookupPath(cue.ParsePath("metadata.name")).String()
+	if err != nil {
+		return cue.Value{}, fmt.Errorf("error reading CRD name: %w", err)
+	}
+	group, _ := crd.LookupPath(cue.ParsePath("spec.group")).String()
+	scope, _ := crd.LookupPath(cue.ParsePath("spec.scope")).String()
+
+	versionManifest := ctx.CompileString(fmt.Sprintf(`
+		name:    %q
+		served:  true
+		storage: true
+		schema: openAPIV3Schema: _
+	`, ver)).FillPath(cue.ParsePath("schema.openAPIV3Schema"), prunedSchema)
+	if subresources := version.LookupPath(cue.ParsePath("subresources")); subresources.Exists() {
+		versionManifest = versionManifest.FillPath(cue.ParsePath("subresources"), subresources)
+	}
+
+	manifest := ctx.CompileString(fmt.Sprintf(`
+		apiVersion: "apiextensions.k8s.io/v1"
+		kind:       "CustomResourceDefinition"
+		metadata: name: %q
+		spec: {
+			group:    %q
+			names:    _
+			scope:    %q
+			versions: _
+		}
+	`, name, group, scope))
+	manifest = manifest.FillPath(cue.ParsePath("spec.names"), crd.LookupPath(cue.ParsePath("spec.names")))
+	manifest = manifest.FillPath(cue.ParsePath("spec.versions"), ctx.NewList(versionManifest))
+	if preserve := crd.LookupPath(cue.ParsePath("spec.preserveUnknownFields")); preserve.Exists() {
+		manifest = manifest.FillPath(cue.ParsePath("spec.preserveUnknownFields"), preserve)
+	}
+	if err := manifest.Validate(cue.Concrete(true), cue.Final()); err != nil {
+		return cue.Value{}, fmt.Errorf("error building CRD manifest for version %s: %w", ver, err)
+	}
+	return manifest, nil
+}
+
+// removeSchemaProperty removes the named property from the properties of an
+// OpenAPI schema expression.
+func removeSchemaProperty(expr ast.Expr, name string) {
+	root, ok := expr.(*ast.StructLit)
+	if !ok {
+		return
+	}
+	for _, elt := range root.Elts {
+		field, ok := elt.(*ast.Field)
+		if !ok {
+			continue
+		}
+		if label, _, err := ast.LabelName(field.Label); err != nil || label != "properties" {
+			continue
+		}
+		properties, ok := field.Value.(*ast.StructLit)
+		if !ok {
+			return
+		}
+		decls := make([]ast.Decl, 0, len(properties.Elts))
+		for _, pelt := range properties.Elts {
+			if pfield, ok := pelt.(*ast.Field); ok {
+				if label, _, err := ast.LabelName(pfield.Label); err == nil && label == name {
+					continue
+				}
+			}
+			decls = append(decls, pelt)
+		}
+		properties.Elts = decls
+		return
+	}
+}
+
+// isPreserveUnknownFieldsFalse returns true for the
+// 'x-kubernetes-preserve-unknown-fields: false' schema field.
+func isPreserveUnknownFieldsFalse(label string, value ast.Expr) bool {
+	if label != "x-kubernetes-preserve-unknown-fields" {
+		return false
+	}
+	lit, ok := value.(*ast.BasicLit)
+	return ok && lit.Value == "false"
+}
+
+// schemaDocKeywords are the OpenAPI keywords with no effect on validation,
+// removed from the CRD schemas embedded in the generated CUE definitions.
+var schemaDocKeywords = map[string]bool{
+	"description":  true,
+	"title":        true,
+	"example":      true,
+	"externalDocs": true,
+}
+
+// pruneSchemaDocs removes the documentation keywords and the
+// 'x-kubernetes-preserve-unknown-fields: false' markers, equivalent to
+// undefined, from an OpenAPI schema expression, descending only through
+// the keywords that hold nested schemas so that property names and default
+// values are left untouched. When propertyMap is true, the struct maps
+// property names to their schemas.
+func pruneSchemaDocs(expr ast.Expr, propertyMap bool) {
+	switch x := expr.(type) {
+	case *ast.StructLit:
+		decls := make([]ast.Decl, 0, len(x.Elts))
+		for _, elt := range x.Elts {
+			field, ok := elt.(*ast.Field)
+			if !ok {
+				decls = append(decls, elt)
+				continue
+			}
+			label, _, err := ast.LabelName(field.Label)
+			if err != nil {
+				decls = append(decls, elt)
+				continue
+			}
+
+			if propertyMap {
+				pruneSchemaDocs(field.Value, false)
+				decls = append(decls, elt)
+				continue
+			}
+
+			if schemaDocKeywords[label] || isPreserveUnknownFieldsFalse(label, field.Value) {
+				continue
+			}
+			switch label {
+			case "properties":
+				pruneSchemaDocs(field.Value, true)
+			case "items", "additionalProperties", "not", "allOf", "anyOf", "oneOf":
+				pruneSchemaDocs(field.Value, false)
+			}
+			decls = append(decls, elt)
+		}
+		x.Elts = decls
+	case *ast.ListLit:
+		for _, elt := range x.Elts {
+			pruneSchemaDocs(elt, false)
+		}
+	}
 }
 
 // preserveUnknownFieldsPaths walks the OpenAPI schema rooted at prefix and

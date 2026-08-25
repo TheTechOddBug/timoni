@@ -65,3 +65,82 @@ import "strings"
 	// Bot username for this provider
 	username?: string
 }
+
+// Original CRD used by 'timoni mod vet' for validation.
+_crd: {
+	apiVersion: "apiextensions.k8s.io/v1"
+	kind:       "CustomResourceDefinition"
+	metadata: {
+		name: "alertproviders.flagger.app"
+	}
+	spec: {
+		group: "flagger.app"
+		names: {
+			categories: ["all"]
+			kind:     "AlertProvider"
+			listKind: "AlertProviderList"
+			plural:   "alertproviders"
+			singular: "alertprovider"
+		}
+		scope: "Namespaced"
+		versions: [{
+			name:    "v1beta1"
+			served:  true
+			storage: true
+			schema: {
+				openAPIV3Schema: {
+					properties: {
+						apiVersion: {
+							type: "string"
+						}
+						kind: {
+							type: "string"
+						}
+						metadata: {
+							type: "object"
+						}
+						spec: {
+							oneOf: [{
+								required: ["type", "address"]
+							}, {
+								required: ["type", "secretRef"]
+							}]
+							properties: {
+								address: {
+									type: "string"
+								}
+								channel: {
+									type: "string"
+								}
+								proxy: {
+									type: "string"
+								}
+								secretRef: {
+									properties: {
+										name: {
+											type: "string"
+										}
+									}
+									required: ["name"]
+									type: "object"
+								}
+								type: {
+									enum: ["slack", "msteams", "discord", "rocket", "gchat"]
+									type: "string"
+								}
+								username: {
+									type: "string"
+								}
+							}
+							type: "object"
+						}
+					}
+					type: "object"
+				}
+			}
+			subresources: {
+				status: {}
+			}
+		}]
+	}
+}

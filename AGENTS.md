@@ -47,6 +47,7 @@ The core of Timoni. Turns CUE into Kubernetes objects:
 - `ResourceSet` — the rendered set of objects.
 - `HealthCheck` — extracts the custom health checks a module declares under `timoni: healthChecks:` (the `#HealthCheck`/`#HealthCheckForCondition` CUE schemas) for custom resources that are not kstatus-compliant.
 - `Importer` (`importer.go`) — generates CUE definitions from Kubernetes **CRDs** by converting their OpenAPI v3 schemas (this is what `timoni mod vendor crd` runs, letting module authors use custom resources type-safely).
+- `CRDValidator` (`crd_validator.go`) — validates rendered custom resources with the kube-apiserver admission packages (OpenAPI schema, CEL rules, list uniqueness) against the original CRDs, which the `Importer` embeds in the generated `types_gen.cue` as a hidden `_crd` field and `timoni mod vet` collects from the module imports and output.
 - `fetcher/` — pulls module sources, either `local.go` (filesystem path) or `oci.go` (OCI registry).
 
 ### `internal/reconciler/` — server-side apply

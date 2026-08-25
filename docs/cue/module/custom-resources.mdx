@@ -25,10 +25,8 @@ From the root dir of your module, run the `timoni mod vendor crds` command, and 
 to the YAML file which contains the Prometheus Operator CRDs:
 
 ```shell
-timoni mod vendor crds -f https://github.com/prometheus-operator/prometheus-operator/releases/download/v0.68.0/stripped-down-crds.yaml
+timoni mod vendor crds -f https://github.com/prometheus-operator/prometheus-operator/releases/latest/download/stripped-down-crds.yaml
 ```
-
-Remote CRD manifests are limited to 16 MiB after HTTP content decoding.
 
 The above command will generate the CUE schemas corresponding to the Kubernetes CRDs
 inside the `cue.mod/gen` directory:
@@ -47,6 +45,15 @@ cue.mod/gen/
     ├── servicemonitor
     └── thanosruler
 ```
+
+<Tip>
+**CEL validation rules**
+
+The generated files embed the original CRD in a hidden `_crd` field.
+This lets `timoni mod vet` enforce the CEL rules set with `x-kubernetes-validations`,
+such as mutually exclusive fields or constraints across field values,
+applying the same strict validation as the Kubernetes API server.
+</Tip>
 
 ### Create the `ServiceMonitor` template
 
@@ -123,3 +130,30 @@ In the `templates/config.cue` file, add the `ServiceMonitor` resource to the ins
 
 Finally, document the `monitoring` configuration in the `README.md` file, so that users
 know how to enable monitoring if they have Prometheus Operator installed.
+
+## Custom resource validation
+
+The `timoni mod vet` command validates the custom resources rendered by the module
+against their CRD schemas with the same checks as the Kubernetes API server:
+
+- OpenAPI schema validation
+- embedded resource metadata validation
+- uniqueness of `x-kubernetes-list-type: map` and `set` items
+- CEL validation rules set by [x-kubernetes-validations](https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#validation-rules)
+
+The CRD schemas are taken from:
+
+- the CUE packages imported by the module, generated with `timoni mod vendor crds`
+- the CRDs included in the module's output
+
+When both sources define the same kind and version, the CRD included in the module takes precedence.
+
+Custom resources that pass all checks are reported as `valid custom resource`.
+Any violation is reported with the field path and the message, and the command fails:
+
+```console
+$ timoni mod vet --debug
+vetting with debug values
+HTTPRoute/default/app spec.endpoints: spec.rules[0].filters[0]: filter.requestRedirect must be specified for RequestRedirect filter.type
+validation failed, 1 invalid custom resource(s)
+```

@@ -27,12 +27,13 @@ require (
 	github.com/phayes/freeport v0.0.0-20220201140144-74d24b5ae9f5
 	github.com/rogpeppe/go-internal v1.15.0
 	github.com/rs/zerolog v1.35.1
-	github.com/sirupsen/logrus v1.10.0
+	github.com/sirupsen/logrus v1.10.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sync v0.22.0
 	k8s.io/api v0.36.4
 	k8s.io/apiextensions-apiserver v0.36.4
 	k8s.io/apimachinery v0.36.4
+	k8s.io/apiserver v0.36.4
 	k8s.io/cli-runtime v0.36.4
 	k8s.io/client-go v0.36.4
 	sigs.k8s.io/controller-runtime v0.24.1
@@ -40,10 +41,12 @@ require (
 )
 
 require (
+	cel.dev/expr v0.25.3 // indirect
 	cuelabs.dev/go/oci/ociregistry v0.0.0-20260601085548-328ff8e2c943 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/MakeNowJust/heredoc v1.0.0 // indirect
+	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/bshuster-repo/logrus-logstash-hook v1.1.0 // indirect
@@ -82,6 +85,7 @@ require (
 	github.com/gonvenience/term v1.0.5 // indirect
 	github.com/gonvenience/text v1.0.10 // indirect
 	github.com/google/btree v1.1.3 // indirect
+	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/handlers v1.5.2 // indirect
@@ -165,6 +169,7 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect

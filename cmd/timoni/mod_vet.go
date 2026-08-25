@@ -42,7 +42,9 @@ var vetModCmd = &cobra.Command{
 	Args:    cobra.MaximumNArgs(1),
 	Aliases: []string{"lint"},
 	Short:   "Validate a local module",
-	Long:    `The vet command builds the local module and validates the resulting Kubernetes objects.`,
+	Long: `The vet command builds the local module and validates the resulting Kubernetes objects.
+Custom resources are validated against their CRD schemas and CEL rules,
+taken from the vendored CRD schemas and from the CRDs included in the module.`,
 	Example: `  # validate module using default values
   timoni mod vet
 
@@ -179,9 +181,41 @@ func runVetModCmd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("build failed, no objects to apply")
 	}
 
+	// Register the CRD schemas vendored in the imported packages first,
+	// so that the CRDs rendered by the module take precedence for the
+	// same kind versions.
+	imports, err := builder.GetImports()
+	if err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+	crdValidator := engine.NewCRDValidator()
+	if err := crdValidator.AddPackages(imports); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+	if err := crdValidator.AddCRDs(objects); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+
+	invalid := 0
 	for _, object := range objects {
-		log.Info(fmt.Sprintf("%s %s",
-			logger.ColorizeSubject(ssautil.FmtUnstructured(object)), logger.ColorizeInfo("valid resource")))
+		subject := logger.ColorizeSubject(ssautil.FmtUnstructured(object))
+		if !crdValidator.HasSchema(object.GroupVersionKind()) {
+			log.Info(fmt.Sprintf("%s %s", subject, logger.ColorizeInfo("valid resource")))
+			continue
+		}
+
+		if errs := crdValidator.Validate(cmd.Context(), object); len(errs) > 0 {
+			invalid++
+			for _, e := range errs {
+				log.Error(nil, fmt.Sprintf("%s %s", subject, logger.ColorizeError(e)))
+			}
+			continue
+		}
+		log.Info(fmt.Sprintf("%s %s", subject, logger.ColorizeInfo("valid custom resource")))
+	}
+
+	if invalid > 0 {
+		return fmt.Errorf("validation failed, %d invalid custom resource(s)", invalid)
 	}
 
 	images, err := builder.GetContainerImages(buildResult)
