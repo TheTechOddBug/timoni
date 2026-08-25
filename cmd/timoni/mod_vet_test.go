@@ -159,3 +159,54 @@ func TestModVetSetNamespaceName(t *testing.T) {
 		g.Expect(err.Error()).To(ContainSubstring("cannot find package"))
 	})
 }
+
+func TestModVetCELRules(t *testing.T) {
+	// The module ships a Widget CRD with CEL rules and vendors the Gadget CRD
+	// under cue.mod/gen. To regenerate the vendored files:
+	// cd cmd/timoni/
+	// timoni mod vendor crd testdata/module-cel -f testdata/module-cel/gadget-crd.yaml
+	modPath := "testdata/module-cel"
+	valuesPath := "testdata/module-cel-values"
+
+	t.Run("vets custom resources against the CEL rules", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"mod vet %s -p main -n default",
+			modPath,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+
+		g.Expect(output).To(ContainSubstring("CustomResourceDefinition/widgets.testing.timoni.sh valid resource v=0"))
+		g.Expect(output).To(ContainSubstring("Widget/default/default valid custom resource"))
+		g.Expect(output).To(ContainSubstring("Gadget/default/default valid custom resource"))
+		g.Expect(output).To(ContainSubstring("timoni.sh/test-cel valid module"))
+	})
+
+	t.Run("fails for rules of the CRD included in the module", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"mod vet %s -p main -n default --values %s",
+			modPath, valuesPath+"/widget-invalid.cue",
+		))
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("validation failed, 1 invalid custom resource(s)"))
+
+		g.Expect(output).To(ContainSubstring("Widget/default/default spec: minReplicas must not exceed replicas"))
+		g.Expect(output).To(ContainSubstring("Gadget/default/default valid custom resource"))
+		g.Expect(output).ToNot(ContainSubstring("valid module"))
+	})
+
+	t.Run("fails for rules of the vendored CRD", func(t *testing.T) {
+		g := NewWithT(t)
+		output, err := executeCommand(fmt.Sprintf(
+			"mod vet %s -p main -n default --values %s",
+			modPath, valuesPath+"/gadget-invalid.cue",
+		))
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("validation failed, 1 invalid custom resource(s)"))
+
+		g.Expect(output).To(ContainSubstring("Gadget/default/default spec: size must be one of small or large"))
+		g.Expect(output).ToNot(ContainSubstring("size is immutable"))
+		g.Expect(output).To(ContainSubstring("Widget/default/default valid custom resource"))
+	})
+}
