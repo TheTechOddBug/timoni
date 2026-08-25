@@ -90,7 +90,7 @@ below.
 | Create a module | `timoni mod init <name> --blueprint oci://ghcr.io/stefanprodan/timoni/blueprints/starter` |
 | Validate a module | `timoni mod vet [path] [--debug]` |
 | Vendor Kubernetes schemas | `timoni mod vendor k8s [-v 1.30]` |
-| Vendor CRD schemas | `timoni mod vendor crd -f <crds.yaml or URL>` |
+| Vendor CRD schemas | `timoni mod vendor crd -f <crds.yaml or URL> [--kind Kind,Kind.group] [-v v1] [--prune]` (`--list` prints the kinds and versions without vendoring) |
 | Publish | `timoni mod push ./module oci://<repo> -v <semver> [--latest=false] [--sign=cosign [--cosign-key=cosign.key]]` |
 | Build an OCI archive without a registry | `timoni mod build ./module -v <semver> -o module.oci.tar` |
 | Generic artifacts | `timoni artifact push oci://<repo> -t <tag> -f ./dir`, `timoni artifact pull oci://<repo>:<tag>`, `timoni artifact build -f ./dir -t <tag> -o out.oci.tar` |
@@ -306,7 +306,11 @@ myapp/
 - Embed plain files (configs, scripts) with `@extern(embed)` on the package
   and `@embed(file=...)` on a field.
 - Custom resources: `timoni mod vendor crd -f <crds.yaml>` generates CUE
-  definitions under `cue.mod/gen` with the CRD schema embedded; `timoni mod vet`
+  definitions under `cue.mod/gen` with the CRD schema embedded. Select the
+  kinds and versions with `--kind` (case-insensitive `Kind` or `Kind.group`)
+  and `-v`; the command fails when a selector matches nothing. Use `--list`
+  to print the kinds and versions in a file, and `--prune` to remove the
+  stale definitions of the file's API groups. `timoni mod vet`
   validates the module's custom resources against the vendored CRDs and the
   CRDs rendered by the module with the API server checks (OpenAPI schema,
   list map/set uniqueness, CEL rules). Add `timoni: healthChecks:` entries for
