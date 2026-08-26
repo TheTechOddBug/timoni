@@ -89,13 +89,13 @@ func (in *RuntimeInjector) inject(node ast.Node, vars map[string]string) (ast.No
 
 			var key, body string
 			for _, a := range field.Attrs {
-				key, body = a.Split()
-				if key == apiv1.FieldManager {
+				if k, b := a.Split(); apiv1.IsRuntimeAttribute(k, b) {
+					key, body = k, b
 					break
 				}
 			}
 
-			if !apiv1.IsRuntimeAttribute(key, body) {
+			if key == "" {
 				return true
 			}
 
