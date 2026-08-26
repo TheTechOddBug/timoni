@@ -44,6 +44,7 @@
             "pages": [
               "bundle",
               "bundle-runtime",
+              "bundle-update",
               "bundle-distribution",
               "bundle-secrets",
               "bundle-multi-cluster"
@@ -154,6 +155,7 @@
               "cmd/timoni_bundle_build",
               "cmd/timoni_bundle_delete",
               "cmd/timoni_bundle_status",
+              "cmd/timoni_bundle_update",
               "cmd/timoni_bundle_vet"
             ]
           },
