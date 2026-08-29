@@ -40,6 +40,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+
+	"github.com/stefanprodan/timoni/internal/engine"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -201,6 +203,7 @@ func resetCmdArgs() {
 	bundleArgs = bundleFlags{}
 	bundleApplyArgs = bundleApplyFlags{}
 	bundleVetArgs = bundleVetFlags{}
+	bundleUpdateArgs = bundleUpdateFlags{level: engine.UpdateLevelNone}
 	bundleDelArgs = bundleDelFlags{}
 	bundleBuildArgs = bundleBuildFlags{}
 	vendorCrdArgs = vendorCrdFlags{}

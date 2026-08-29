@@ -6,7 +6,7 @@ metadata:
   author: Stefan Prodan
   homepage: https://timoni.sh
   source: https://github.com/stefanprodan/timoni
-  version: "0.1.2"
+  version: "0.2.0"
 ---
 
 # Timoni
@@ -73,6 +73,8 @@ below.
 | Render to stdout without Secret values | `timoni bundle build -f bundle.cue --mask-secrets` |
 | Status | `timoni bundle status -f bundle.cue` or `timoni bundle status <name>` |
 | Delete | `timoni bundle delete -f bundle.cue` or `timoni bundle delete <name>` |
+| Update module versions per policy | `timoni bundle update -f bundle.cue [--level patch\|minor\|major]` |
+| Preview module updates | `timoni bundle update -f bundle.cue --dry-run` (prints `old -> new` per instance, writes nothing) |
 | With a runtime | add `-r runtime.cue`; select with `--runtime-cluster <name>` / `--runtime-group <group>` |
 | Runtime values from CI env vars | add `--runtime-from-env` |
 | Print resolved runtime values | `timoni runtime build -f runtime.cue [--cluster <name>] [--cluster-group <group>]` |
@@ -129,14 +131,16 @@ bundle: {
 		redis: {
 			module: {
 				url:     "oci://ghcr.io/stefanprodan/modules/redis"
-				version: "8.10.1"
+				version: "8.10.1" @timoni(update:semver:8.x)
 			}
 			namespace: "podinfo"
 			values: maxmemory: 256
 		}
 		podinfo: {
-			module: url:     "oci://ghcr.io/stefanprodan/modules/podinfo"
-			module: version: "6.14.0"
+			module: {
+				url:     "oci://ghcr.io/stefanprodan/modules/podinfo"
+				version: "6.14.0" @timoni(update:semver:6.x)
+			}
 			namespace: "podinfo"
 			values: caching: {
 				enabled:  true
@@ -176,6 +180,12 @@ bundle: {
   `--overwrite-ownership` is passed.
 - Bundles can import CUE packages from `cue.mod` in the working directory
   (`--workdir` selects the CUE module root).
+- `timoni bundle update -f bundle.cue` rewrites the module versions and
+  digests according to the `@timoni(update:semver:<constraint>|digest|none)`
+  attribute on the `version` field; `--level patch|minor|major` updates the
+  references without an attribute, and `--dry-run` only prints the changes.
+  Run `timoni bundle vet` and `timoni bundle build` afterwards, the update
+  does not validate the values against the new module schema.
 
 ## Runtimes and multi-cluster
 
@@ -390,6 +400,7 @@ URL returns the page as markdown.
 - [Timoni compared to other tools](https://timoni.sh/comparison.md): How Timoni compares to Helm, Kustomize and other Kubernetes packaging tools.
 - [Bundle](https://timoni.sh/bundle.md): Declare groups of module instances and their values in a single CUE file.
 - [Bundle Runtime](https://timoni.sh/bundle-runtime.md): Fetch values at apply time from Kubernetes Secrets, ConfigMaps and other resources.
+- [Bundle Update](https://timoni.sh/bundle-update.md): Update the module versions and digests referenced in bundles according to declared update policies.
 - [Bundle Distribution](https://timoni.sh/bundle-distribution.md): Publish bundles and runtimes as OCI artifacts to container registries.
 - [Bundle Secrets Injection](https://timoni.sh/bundle-secrets.md): Inject secrets into bundles with runtime attributes or SOPS encrypted files.
 - [Multi-cluster Deployments](https://timoni.sh/bundle-multi-cluster.md): Deliver applications across clusters and environments with bundles and runtimes.

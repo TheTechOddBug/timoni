@@ -571,6 +571,28 @@ timoni bundle vet -f bundle.cue --runtime-from-env --print-value
 
 Printing the computed value is particular useful when debugging runtime attributes.
 
+### Update module versions
+
+To update the module versions and digests referenced in a bundle,
+you can use the `timoni bundle update` command. The update policy
+is declared per module reference with the `@timoni(update:...)` attribute:
+
+```cue
+module: {
+	url:     "oci://ghcr.io/stefanprodan/modules/redis"
+	version: "8.9.0" @timoni(update:semver:8.x)
+}
+```
+
+Example:
+
+```shell
+timoni bundle update -f bundle.cue
+```
+
+For the update policies, the `--level` flag and the CI integration,
+see [Bundle updates](/bundle-update).
+
 ### Format
 
 To format Bundle files, you can use the `timoni fmt` command.
