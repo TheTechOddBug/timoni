@@ -802,6 +802,49 @@ func TestCRDValidator_AddPackages(t *testing.T) {
 		g.Expect(err.Error()).To(ContainSubstring("invalid _crd field in package testing.timoni.sh/widget/v1"))
 	})
 
+	t.Run("ignores packages that fail to evaluate on their own", func(t *testing.T) {
+		// The generated package is imported only by the templates package,
+		// whose #Route does not evaluate at the #Config defaults.
+		moduleRoot := writeTestModule(t, map[string]string{})
+		genDir := filepath.Join(moduleRoot, "cue.mod", "gen", "testing.timoni.sh", "widget", "v1")
+		g.Expect(os.MkdirAll(genDir, os.ModePerm)).To(Succeed())
+		g.Expect(os.WriteFile(filepath.Join(genDir, "types_gen.cue"), generated["testing.timoni.sh/widget/v1"], 0644)).To(Succeed())
+
+		templates := `package templates
+
+import p "testing.timoni.sh/widget/v1"
+
+#Config: route: {
+	enabled: *false | bool
+	if enabled {
+		parentRefs: [...string]
+	}
+}
+
+#Route: p.#Widget & {
+	_config: #Config
+	spec: parentRefs: _config.route.parentRefs
+}
+`
+		g.Expect(os.MkdirAll(filepath.Join(moduleRoot, "templates"), os.ModePerm)).To(Succeed())
+		g.Expect(os.WriteFile(filepath.Join(moduleRoot, "templates", "templates.cue"), []byte(templates), 0644)).To(Succeed())
+		main := "package main\n\nimport t \"timoni.sh/test/templates\"\n\n_config: t.#Config\n"
+		g.Expect(os.WriteFile(filepath.Join(moduleRoot, "templates.cue"), []byte(main), 0644)).To(Succeed())
+
+		builder := NewModuleBuilder(cuecontext.New(), "test", "default", moduleRoot, defaultPackage)
+		_, err := builder.Build()
+		g.Expect(err).ToNot(HaveOccurred())
+
+		imports, err := builder.GetImports()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(imports).To(HaveLen(1))
+		g.Expect(imports[0].Path).To(Equal("testing.timoni.sh/widget/v1"))
+
+		v := NewCRDValidator()
+		g.Expect(v.AddPackages(imports)).To(Succeed())
+		g.Expect(v.HasSchema(widgetV1)).To(BeTrue())
+	})
+
 	t.Run("requires a built module", func(t *testing.T) {
 		builder := NewModuleBuilder(cuecontext.New(), "test", "default", t.TempDir(), defaultPackage)
 		_, err := builder.GetImports()

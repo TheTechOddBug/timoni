@@ -231,7 +231,12 @@ type ModuleImport struct {
 }
 
 // GetImports returns the CUE packages imported, directly or transitively,
-// by the module package compiled with Build.
+// by the module package compiled with Build. Packages that fail to
+// evaluate on their own are left out, while their imports are still
+// collected: the module build has already validated everything the
+// module output depends on, and the definitions a module does not
+// instantiate may legitimately not evaluate at their defaults, e.g. a
+// template referencing a config field declared under a conditional.
 func (b *ModuleBuilder) GetImports() ([]ModuleImport, error) {
 	if b.instance == nil {
 		return nil, errors.New("module not built")
@@ -254,10 +259,9 @@ func (b *ModuleBuilder) GetImports() ([]ModuleImport, error) {
 			}
 
 			value := b.ctx.BuildInstance(imp)
-			if value.Err() != nil {
-				return fmt.Errorf("building import %s failed: %w", imp.ImportPath, value.Err())
+			if value.Err() == nil {
+				values = append(values, ModuleImport{Path: imp.ImportPath, Value: value})
 			}
-			values = append(values, ModuleImport{Path: imp.ImportPath, Value: value})
 
 			if err := walk(imp); err != nil {
 				return err
