@@ -29,6 +29,7 @@ import (
 	"cuelang.org/go/cue/cuecontext"
 	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	apiv1 "github.com/stefanprodan/timoni/api/v1alpha1"
 	"github.com/stefanprodan/timoni/internal/engine"
@@ -43,6 +44,8 @@ var bundleApplyCmd = &cobra.Command{
 	Use:   "apply",
 	Short: "Install or upgrade instances from a bundle",
 	Long: `The bundle apply command installs or upgrades the instances defined in a bundle.
+
+Custom resources are validated against the CRD schemas vendored in the modules and the CRDs rendered by the instance and by the earlier instances of the bundle. A violation fails the command before the instance is applied. Use --validate=false to disable the validation.
 `,
 	Example: `  # Install all instances from a bundle
   timoni bundle apply -f bundle.cue
@@ -77,6 +80,7 @@ type bundleApplyFlags struct {
 	wait               bool
 	force              bool
 	overwriteOwnership bool
+	validate           bool
 	creds              flags.Credentials
 }
 
@@ -96,6 +100,8 @@ func init() {
 		"Perform a server-side apply dry run and prints the diff. Exits with code 1 if drift is detected and code 2 on errors.")
 	bundleApplyCmd.Flags().BoolVar(&bundleApplyArgs.wait, "wait", true,
 		"Wait for the applied Kubernetes objects to become ready.")
+	bundleApplyCmd.Flags().BoolVar(&bundleApplyArgs.validate, "validate", true,
+		"Validate the custom resources against their CRD schemas and CEL rules.")
 	bundleApplyCmd.Flags().Var(&bundleApplyArgs.creds, bundleApplyArgs.creds.Type(), bundleApplyArgs.creds.Description())
 	bundleCmd.AddCommand(bundleApplyCmd)
 }
@@ -238,9 +244,10 @@ func runBundleApplyCmd(cmd *cobra.Command) error {
 		}
 
 		clusterDrifts := len(driftErrs)
+		crdValidator := engine.NewCRDValidator()
 		for _, instance := range bundle.Instances {
 			instance.Cluster = cluster.Name
-			err := applyBundleInstance(logr.NewContext(ctx, log), instance, kubeVersion, tmpDir, modDirs[instance.Name], cmd.OutOrStdout())
+			err := applyBundleInstance(logr.NewContext(ctx, log), instance, kubeVersion, tmpDir, modDirs[instance.Name], crdValidator, cmd.OutOrStdout())
 			if err != nil {
 				// In diff mode, keep diffing the remaining instances and
 				// report the drifted ones at the end of the run.
@@ -333,14 +340,15 @@ func fetchBundleInstanceModule(ctx context.Context, instance *apiv1.BundleInstan
 	return cached.dir, nil
 }
 
-// applyBundleInstance builds an instance and reconciles its Kubernetes
-// objects onto the cluster. The instance is compiled in its own CUE context
-// so that the memory used during the build can be reclaimed once the objects
-// are extracted, keeping the peak usage constant regardless of how many
-// instances a bundle contains. The module directory is shared between the
-// instances referencing the same module version and is never modified; the
-// instance schema and values are injected as in-memory overlays.
-func applyBundleInstance(ctx context.Context, instance *apiv1.BundleInstance, kubeVersion string, rootDir string, modDir string, diffOutput io.Writer) error {
+// applyBundleInstance builds and validates an instance, then reconciles its
+// Kubernetes objects onto the cluster. The instance is compiled in its own
+// CUE context so that the memory used during the build can be reclaimed once
+// the objects are extracted, keeping the peak usage constant regardless of
+// how many instances a bundle contains. The module directory is shared
+// between the instances referencing the same module version and is never
+// modified; the instance schema and values are injected as in-memory
+// overlays. The validator carries schemas registered by earlier instances.
+func applyBundleInstance(ctx context.Context, instance *apiv1.BundleInstance, kubeVersion string, rootDir string, modDir string, crdValidator *engine.CRDValidator, diffOutput io.Writer) error {
 	log := loggerBundleInstance(ctx, instance.Bundle, instance.Cluster, instance.Name, true)
 
 	builder := engine.NewModuleBuilder(
@@ -373,6 +381,32 @@ func applyBundleInstance(ctx context.Context, instance *apiv1.BundleInstance, ku
 	buildResult, err := builder.Build()
 	if err != nil {
 		return describeErr(modDir, "build failed for "+instance.Name, err)
+	}
+
+	if bundleApplyArgs.validate {
+		applySets, err := builder.GetApplySets(buildResult)
+		if err != nil {
+			return fmt.Errorf("failed to extract objects: %w", err)
+		}
+		var objects []*unstructured.Unstructured
+		for _, set := range applySets {
+			objects = append(objects, set.Objects...)
+		}
+
+		vendoredCRDs, err := builder.GetVendoredCRDs()
+		if err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+		if err := crdValidator.AddVendoredCRDs(vendoredCRDs); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+		if err := crdValidator.AddCRDs(objects); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+		validationErrs := crdValidator.ValidateObjects(ctx, objects)
+		if invalid := logValidationErrors(log, validationErrs, instance.Name); invalid > 0 {
+			return fmt.Errorf("validation failed, %d invalid custom resource(s)", invalid)
+		}
 	}
 
 	r := reconciler.NewInteractiveReconciler(log,

@@ -3,8 +3,6 @@
 package main
 
 values: {
-	replicas:        3
-	minReplicas:     1
-	size:            "small"
-	customResources: true
+	replicas:    3
+	minReplicas: 1
 }

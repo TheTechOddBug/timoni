@@ -71,24 +71,6 @@ func NewCRDValidator() *CRDValidator {
 	return &CRDValidator{schemas: make(map[schema.GroupVersionKind]*crdSchema)}
 }
 
-// AddPackages registers the CRD schemas embedded by 'timoni mod vendor crd'
-// in the given CUE packages, ignoring packages without an embedded schema.
-func (v *CRDValidator) AddPackages(packages []ModuleImport) error {
-	for _, pkg := range packages {
-		crd, found, err := embeddedCRD(pkg.Value)
-		if err != nil {
-			return fmt.Errorf("invalid %s field in package %s: %w", crdField, pkg.Path, err)
-		}
-		if !found {
-			continue
-		}
-		if err := v.AddCRD(crd); err != nil {
-			return fmt.Errorf("invalid %s field in package %s: %w", crdField, pkg.Path, err)
-		}
-	}
-	return nil
-}
-
 // AddCRDs registers the schemas of the CustomResourceDefinitions found in
 // the given objects, ignoring objects of any other kind.
 func (v *CRDValidator) AddCRDs(objects []*unstructured.Unstructured) error {
@@ -103,12 +85,32 @@ func (v *CRDValidator) AddCRDs(objects []*unstructured.Unstructured) error {
 	return nil
 }
 
+// AddVendoredCRDs registers the schemas of the given CustomResourceDefinitions
+// vendored with 'timoni mod vendor crd', skipping the kind versions already
+// registered, so that the CRDs added with AddCRDs take precedence over the
+// vendored schemas regardless of the registration order.
+func (v *CRDValidator) AddVendoredCRDs(crds []*unstructured.Unstructured) error {
+	for _, crd := range crds {
+		if err := v.addCRD(crd, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // AddCRD registers the schema of every version of the given
 // CustomResourceDefinition, replacing schemas previously registered
 // for the same kind versions. A version whose schema cannot be compiled
 // is registered with the compilation error, reported by Validate for
 // every object of that kind version.
 func (v *CRDValidator) AddCRD(crd *unstructured.Unstructured) error {
+	return v.addCRD(crd, false)
+}
+
+// addCRD registers the schema of every version of the given
+// CustomResourceDefinition, skipping the kind versions already registered
+// when keepExisting is set.
+func (v *CRDValidator) addCRD(crd *unstructured.Unstructured, keepExisting bool) error {
 	group, versions, err := crdVersions(crd)
 	if err != nil {
 		return err
@@ -118,6 +120,9 @@ func (v *CRDValidator) AddCRD(crd *unstructured.Unstructured) error {
 
 	for _, ver := range versions {
 		gvk := schema.GroupVersionKind{Group: group, Version: ver.name, Kind: kind}
+		if _, registered := v.schemas[gvk]; registered && keepExisting {
+			continue
+		}
 		s := &crdSchema{
 			pruneUnknown: !preserveUnknown,
 			dropStatus:   ver.statusSubresource,
@@ -203,6 +208,38 @@ func (v *CRDValidator) Validate(ctx context.Context, object *unstructured.Unstru
 	errs := make([]error, 0, len(msgs))
 	for _, msg := range msgs {
 		errs = append(errs, errors.New(msg))
+	}
+	return errs
+}
+
+// ValidationError is a violation found by ValidateObjects in the
+// custom resource identified by its kind, namespace and name.
+type ValidationError struct {
+	Object string
+	Err    error
+}
+
+// Error returns the object identifier followed by the violation.
+func (e ValidationError) Error() string {
+	return e.Object + " " + e.Err.Error()
+}
+
+// Unwrap returns the violation.
+func (e ValidationError) Unwrap() error {
+	return e.Err
+}
+
+// ValidateObjects checks every object with a registered schema and returns
+// one ValidationError per violation, in the order of the objects.
+func (v *CRDValidator) ValidateObjects(ctx context.Context, objects []*unstructured.Unstructured) []ValidationError {
+	var errs []ValidationError
+	for _, object := range objects {
+		if !v.HasSchema(object.GroupVersionKind()) {
+			continue
+		}
+		for _, err := range v.Validate(ctx, object) {
+			errs = append(errs, ValidationError{Object: ssautil.FmtUnstructured(object), Err: err})
+		}
 	}
 	return errs
 }

@@ -6,9 +6,10 @@ import (
 
 // Define the schema for the user-supplied values.
 values: {
-	replicas:    *3 | int
-	minReplicas: *1 | int
-	size:        *"small" | string
+	replicas:        *3 | int
+	minReplicas:     *1 | int
+	size:            *"small" | string
+	customResources: *true | bool
 }
 
 // Define how Timoni should build, validate and
@@ -22,9 +23,10 @@ timoni: {
 				name:      string @tag(name)
 				namespace: string @tag(namespace)
 			}
-			replicas:    values.replicas
-			minReplicas: values.minReplicas
-			size:        values.size
+			replicas:        values.replicas
+			minReplicas:     values.minReplicas
+			size:            values.size
+			customResources: values.customResources
 		}
 
 		objects: {
@@ -65,26 +67,28 @@ timoni: {
 				}
 			}
 
-			widget: {
-				apiVersion: "testing.timoni.sh/v1"
-				kind:       "Widget"
-				metadata: {
-					name:      config.metadata.name
-					namespace: config.metadata.namespace
+			if config.customResources {
+				widget: {
+					apiVersion: "testing.timoni.sh/v1"
+					kind:       "Widget"
+					metadata: {
+						name:      config.metadata.name
+						namespace: config.metadata.namespace
+					}
+					spec: {
+						replicas:    config.replicas
+						minReplicas: config.minReplicas
+					}
 				}
-				spec: {
-					replicas:    config.replicas
-					minReplicas: config.minReplicas
-				}
-			}
 
-			// The Gadget CRD is vendored in cue.mod/gen along with its CEL rules.
-			gadget: gadgetv1.#Gadget & {
-				metadata: {
-					name:      config.metadata.name
-					namespace: config.metadata.namespace
+				// The Gadget CRD is vendored in cue.mod/gen along with its CEL rules.
+				gadget: gadgetv1.#Gadget & {
+					metadata: {
+						name:      config.metadata.name
+						namespace: config.metadata.namespace
+					}
+					spec: size: config.size
 				}
-				spec: size: config.size
 			}
 		}
 	}

@@ -29,6 +29,7 @@ import (
 	"cuelang.org/go/cue/build"
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/load"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	apiv1 "github.com/stefanprodan/timoni/api/v1alpha1"
 )
@@ -274,6 +275,28 @@ func (b *ModuleBuilder) GetImports() ([]ModuleImport, error) {
 		return nil, err
 	}
 	return values, nil
+}
+
+// GetVendoredCRDs returns the CustomResourceDefinitions embedded in the CUE
+// packages imported by the module compiled with Build. Packages without an
+// embedded CustomResourceDefinition are ignored.
+func (b *ModuleBuilder) GetVendoredCRDs() ([]*unstructured.Unstructured, error) {
+	imports, err := b.GetImports()
+	if err != nil {
+		return nil, err
+	}
+
+	var crds []*unstructured.Unstructured
+	for _, pkg := range imports {
+		crd, found, err := embeddedCRD(pkg.Value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s field in package %s: %w", crdField, pkg.Path, err)
+		}
+		if found {
+			crds = append(crds, crd)
+		}
+	}
+	return crds, nil
 }
 
 // GetAPIVersion returns the list of API version of the Timoni's CUE definition.

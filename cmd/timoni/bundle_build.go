@@ -27,6 +27,7 @@ import (
 	goruntime "runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"cuelang.org/go/cue/cuecontext"
 	"github.com/fluxcd/pkg/ssa"
@@ -47,6 +48,8 @@ var bundleBuildCmd = &cobra.Command{
 	Aliases: []string{"template"},
 	Short:   "Build and print the resulting Kubernetes resources for all instances from a Bundle",
 	Long: `The bundle build command builds and prints the resulting Kubernetes resources for all instances defined in a Bundle.
+
+Custom resources are validated against the CRD schemas vendored in the modules and the CRDs rendered by any instance of the bundle. A violation fails the command and nothing is written. Use --validate=false to disable the validation.
 `,
 	Example: `  # Build all instances from a bundle and print the manifests to stdout
   timoni bundle build -f bundle.cue
@@ -69,6 +72,7 @@ type bundleBuildFlags struct {
 	outputDir   string
 	concurrency int
 	maskSecrets bool
+	validate    bool
 }
 
 var bundleBuildArgs bundleBuildFlags
@@ -84,6 +88,8 @@ func init() {
 		"The number of instances to build concurrently, defaults to the number of CPU cores capped at 8.")
 	bundleBuildCmd.Flags().BoolVar(&bundleBuildArgs.maskSecrets, "mask-secrets", false,
 		"Hide the values of Kubernetes Secrets in the printed objects, ignored with --output-dir.")
+	bundleBuildCmd.Flags().BoolVar(&bundleBuildArgs.validate, "validate", true,
+		"Validate the custom resources against their CRD schemas and CEL rules.")
 	bundleCmd.AddCommand(bundleBuildCmd)
 }
 
@@ -122,47 +128,9 @@ func runBundleBuildCmd(cmd *cobra.Command, _ []string) error {
 	bm := engine.NewBundleBuilder(ctx, files)
 	bm.SetWorkdir(workdir)
 
-	workspace := apiv1.RuntimeDefaultName
-	runtimeValues := make(map[string]string)
-
-	if bundleArgs.runtimeFromEnv {
-		maps.Copy(runtimeValues, engine.GetEnv())
-	}
-
-	if len(bundleArgs.runtimeFiles) > 0 {
-		kctx, cancel := context.WithTimeout(cmd.Context(), rootArgs.timeout)
-		defer cancel()
-
-		rt, err := buildRuntime(bundleArgs.runtimeFiles, bundleArgs.workdir)
-		if err != nil {
-			return err
-		}
-
-		clusters := rt.SelectClusters(bundleArgs.runtimeCluster, bundleArgs.runtimeClusterGroup)
-		if len(clusters) > 1 {
-			return errors.New("you must select a cluster with --runtime-cluster")
-		}
-		if len(clusters) == 0 {
-			return errors.New("no cluster found")
-		}
-
-		cluster := clusters[0]
-		workspace = cluster.Name
-		kubeconfigArgs.Context = &cluster.KubeContext
-
-		rm, err := runtime.NewResourceManager(kubeconfigArgs)
-		if err != nil {
-			return err
-		}
-
-		reader := runtime.NewResourceReader(rm)
-		rv, err := reader.Read(kctx, rt.Refs)
-		if err != nil {
-			return err
-		}
-
-		maps.Copy(runtimeValues, rv)
-		maps.Copy(runtimeValues, cluster.NameGroupValues())
+	workspace, runtimeValues, err := resolveBundleBuildRuntime(cmd)
+	if err != nil {
+		return err
 	}
 
 	if err := bm.InitWorkspace(workspace, runtimeValues); err != nil {
@@ -192,25 +160,144 @@ func runBundleBuildCmd(cmd *cobra.Command, _ []string) error {
 		modDirs[instance.Name] = modDir
 	}
 
-	if bundleBuildArgs.outputDir != "" {
-		return writeBundleInstancesToDir(cmd, bundle.Instances, modDirs)
+	// Build the instances concurrently, each in its own CUE context, and
+	// retain the objects in the order defined by the bundle.
+	objectsByInstance := make([][]*unstructured.Unstructured, len(bundle.Instances))
+	var vendoredCache *vendoredCRDCache
+	if bundleBuildArgs.validate {
+		vendoredCache = &vendoredCRDCache{crds: make(map[string][]*unstructured.Unstructured)}
 	}
-
-	// Build the instances concurrently, each in its own CUE context,
-	// and assemble the manifests in the order defined by the bundle.
-	manifests := make([]string, len(bundle.Instances))
 	eg := errgroup.Group{}
 	eg.SetLimit(buildConcurrency())
 	for i, instance := range bundle.Instances {
 		eg.Go(func() error {
-			objects, err := buildBundleInstanceObjects(instance, modDirs[instance.Name])
+			objects, err := buildBundleInstanceObjects(instance, modDirs[instance.Name], vendoredCache)
 			if err != nil {
 				return err
 			}
+			objectsByInstance[i] = objects
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return err
+	}
 
+	if bundleBuildArgs.validate {
+		if err := validateBundleInstanceObjects(cmd, bundle.Instances, modDirs, objectsByInstance, vendoredCache); err != nil {
+			return err
+		}
+	}
+
+	if bundleBuildArgs.outputDir != "" {
+		return writeBundleInstancesToDir(cmd, bundle.Instances, objectsByInstance)
+	}
+
+	return printBundleInstances(cmd, bundle.Instances, objectsByInstance)
+}
+
+// resolveBundleBuildRuntime returns the workspace name and the runtime values
+// for the bundle build: the process environment with --runtime-from-env, and
+// the values read from the single cluster selected by --runtime.
+func resolveBundleBuildRuntime(cmd *cobra.Command) (string, map[string]string, error) {
+	workspace := apiv1.RuntimeDefaultName
+	runtimeValues := make(map[string]string)
+
+	if bundleArgs.runtimeFromEnv {
+		maps.Copy(runtimeValues, engine.GetEnv())
+	}
+
+	if len(bundleArgs.runtimeFiles) == 0 {
+		return workspace, runtimeValues, nil
+	}
+
+	kctx, cancel := context.WithTimeout(cmd.Context(), rootArgs.timeout)
+	defer cancel()
+
+	rt, err := buildRuntime(bundleArgs.runtimeFiles, bundleArgs.workdir)
+	if err != nil {
+		return "", nil, err
+	}
+
+	clusters := rt.SelectClusters(bundleArgs.runtimeCluster, bundleArgs.runtimeClusterGroup)
+	if len(clusters) > 1 {
+		return "", nil, errors.New("you must select a cluster with --runtime-cluster")
+	}
+	if len(clusters) == 0 {
+		return "", nil, errors.New("no cluster found")
+	}
+
+	cluster := clusters[0]
+	workspace = cluster.Name
+	kubeconfigArgs.Context = &cluster.KubeContext
+
+	rm, err := runtime.NewResourceManager(kubeconfigArgs)
+	if err != nil {
+		return "", nil, err
+	}
+
+	reader := runtime.NewResourceReader(rm)
+	rv, err := reader.Read(kctx, rt.Refs)
+	if err != nil {
+		return "", nil, err
+	}
+
+	maps.Copy(runtimeValues, rv)
+	maps.Copy(runtimeValues, cluster.NameGroupValues())
+
+	return workspace, runtimeValues, nil
+}
+
+// validateBundleInstanceObjects validates the custom resources of all the
+// instances against the vendored CRDs, registered once per module, and the
+// CRDs rendered by the instances in bundle order; the rendered CRDs take
+// precedence for the same kind versions.
+func validateBundleInstanceObjects(cmd *cobra.Command, instances []*apiv1.BundleInstance, modDirs map[string]string,
+	objectsByInstance [][]*unstructured.Unstructured, vendoredCache *vendoredCRDCache) error {
+	crdValidator := engine.NewCRDValidator()
+	registered := make(map[string]bool)
+	for _, instance := range instances {
+		modDir := modDirs[instance.Name]
+		if registered[modDir] {
+			continue
+		}
+		registered[modDir] = true
+		vendoredCRDs, _ := vendoredCache.get(modDir)
+		if err := crdValidator.AddVendoredCRDs(vendoredCRDs); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+	}
+	for _, objects := range objectsByInstance {
+		if err := crdValidator.AddCRDs(objects); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+	}
+
+	invalid := 0
+	log := LoggerFrom(cmd.Context())
+	for i, objects := range objectsByInstance {
+		validationErrs := crdValidator.ValidateObjects(cmd.Context(), objects)
+		invalid += logValidationErrors(log, validationErrs, instances[i].Name)
+	}
+	if invalid > 0 {
+		return fmt.Errorf("validation failed, %d invalid custom resource(s)", invalid)
+	}
+	return nil
+}
+
+// printBundleInstances marshals the objects of each instance to YAML
+// concurrently, masking the Secret values with --mask-secrets, and writes
+// the manifests to the command output in the order defined by the bundle.
+func printBundleInstances(cmd *cobra.Command, instances []*apiv1.BundleInstance, objectsByInstance [][]*unstructured.Unstructured) error {
+	manifests := make([]string, len(instances))
+	eg := errgroup.Group{}
+	eg.SetLimit(buildConcurrency())
+	for i := range instances {
+		eg.Go(func() error {
+			objects := objectsByInstance[i]
 			if bundleBuildArgs.maskSecrets {
-				for i, obj := range objects {
-					objects[i] = mask.SecretData(obj)
+				for j, obj := range objects {
+					objects[j] = mask.SecretData(obj)
 				}
 			}
 
@@ -218,7 +305,6 @@ func runBundleBuildCmd(cmd *cobra.Command, _ []string) error {
 			if err != nil {
 				return err
 			}
-
 			manifests[i] = m
 			return nil
 		})
@@ -228,12 +314,12 @@ func runBundleBuildCmd(cmd *cobra.Command, _ []string) error {
 	}
 
 	var sb strings.Builder
-	for i, instance := range bundle.Instances {
+	for i, instance := range instances {
 		sb.WriteString("---\n")
 		sb.WriteString(fmt.Sprintf("# Instance: %s\n", instance.Name))
 		sb.WriteString("---\n")
 		sb.WriteString(manifests[i])
-		if i < len(bundle.Instances)-1 {
+		if i < len(instances)-1 {
 			sb.WriteString("\n")
 		}
 	}
@@ -260,28 +346,23 @@ func buildConcurrency() int {
 	return min(goruntime.NumCPU(), 8)
 }
 
-// writeBundleInstancesToDir writes the resources of each instance to the
-// output directory as a tree: one directory per instance and one file per
-// resource, named with the same convention as 'kustomize build -o <dir>'.
-func writeBundleInstancesToDir(cmd *cobra.Command, instances []*apiv1.BundleInstance, modDirs map[string]string) error {
+// writeBundleInstancesToDir writes previously built resources to the output
+// directory as a tree: one directory per instance and one file per resource,
+// named with the same convention as 'kustomize build -o <dir>'.
+func writeBundleInstancesToDir(cmd *cobra.Command, instances []*apiv1.BundleInstance, objectsByInstance [][]*unstructured.Unstructured) error {
 	outputDir := bundleBuildArgs.outputDir
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	// Build the instances and write their resources concurrently, each
-	// instance in its own CUE context and its own directory, then report
-	// the results in the order defined by the bundle.
+	// Write each instance to its own directory concurrently, then report the
+	// results in the order defined by the bundle.
 	exported := make([]string, len(instances))
 	eg := errgroup.Group{}
 	eg.SetLimit(buildConcurrency())
 	for i, instance := range instances {
 		eg.Go(func() error {
-			objects, err := buildBundleInstanceObjects(instance, modDirs[instance.Name])
-			if err != nil {
-				return err
-			}
-
+			objects := objectsByInstance[i]
 			instanceDir := filepath.Join(outputDir, instance.Name)
 			if err := os.MkdirAll(instanceDir, 0o755); err != nil {
 				return fmt.Errorf("failed to create instance directory: %w", err)
@@ -357,14 +438,38 @@ func resourceFileName(obj *unstructured.Unstructured, withNamespace bool) string
 	return fileName
 }
 
+// vendoredCRDCache stores extracted vendored CRDs by module directory.
+type vendoredCRDCache struct {
+	mu   sync.Mutex
+	crds map[string][]*unstructured.Unstructured
+}
+
+// get returns the cached vendored CRDs for a module directory.
+func (c *vendoredCRDCache) get(modDir string) ([]*unstructured.Unstructured, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	crds, ok := c.crds[modDir]
+	return crds, ok
+}
+
+// put caches vendored CRDs for a module directory.
+func (c *vendoredCRDCache) put(modDir string, crds []*unstructured.Unstructured) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.crds[modDir] = crds
+}
+
 // buildBundleInstanceObjects builds an instance and returns its sorted
 // Kubernetes objects. The instance is compiled in its own CUE context so
 // that the memory used during the build can be reclaimed once the objects
-// are extracted, keeping the peak usage constant regardless of how many
-// instances a bundle contains. The module directory is shared between the
-// instances referencing the same module version and is never modified; the
-// instance schema and values are injected as in-memory overlays.
-func buildBundleInstanceObjects(instance *apiv1.BundleInstance, modDir string) ([]*unstructured.Unstructured, error) {
+// are extracted, leaving only the rendered objects of the built instances
+// in memory until they are written. The module directory is shared between
+// the instances referencing the same module version and is never modified;
+// the instance schema and values are injected as in-memory overlays.
+// When a cache is given, the CRDs vendored in the module are extracted
+// while the CUE context is alive and stored in the cache under the module
+// directory, unless another instance of the same module stored them already.
+func buildBundleInstanceObjects(instance *apiv1.BundleInstance, modDir string, cache *vendoredCRDCache) ([]*unstructured.Unstructured, error) {
 	builder := engine.NewModuleBuilder(
 		nil,
 		instance.Name,
@@ -404,6 +509,16 @@ func buildBundleInstanceObjects(instance *apiv1.BundleInstance, modDir string) (
 		objects = append(objects, set.Objects...)
 	}
 	sort.Sort(ssa.SortableUnstructureds(objects))
+
+	if cache != nil {
+		if _, found := cache.get(modDir); !found {
+			vendoredCRDs, err := builder.GetVendoredCRDs()
+			if err != nil {
+				return nil, fmt.Errorf("failed to extract vendored CRDs: %w", err)
+			}
+			cache.put(modDir, vendoredCRDs)
+		}
+	}
 
 	return objects, nil
 }

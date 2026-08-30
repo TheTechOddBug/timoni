@@ -385,6 +385,11 @@ The apply command performs the following actions for each instance:
 - Applies the Kubernetes resources on the cluster.
 - Creates or updates the instance inventory with the last applied resources IDs.
 
+Before applying an instance, Timoni validates its custom resources against the
+CRD schemas vendored in the module and the CRDs rendered by the instance and by
+the earlier instances of the bundle. A violation fails the apply before the
+instance is written to the cluster. Use `--validate=false` to disable the validation.
+
 ### Diff Upgrade
 
 After editing a bundle file, you can review the changes that will
@@ -458,6 +463,15 @@ Example:
 ```shell
 timoni bundle build -f bundle.cue
 ```
+
+#### Validation
+
+The custom resources of every instance are validated against the CRD schemas
+vendored in the modules and the CRDs rendered by any instance of the bundle, with
+the same checks as the Kubernetes API server, see
+[custom resource validation](/cue/module/custom-resources#custom-resource-validation).
+A violation fails the build before anything is written to stdout or to the output
+directory. Use `--validate=false` to disable the validation.
 
 To print the manifests without exposing credentials, for example when sharing
 the output or reviewing it in a CI log, use the `--mask-secrets` flag which

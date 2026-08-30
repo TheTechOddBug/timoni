@@ -30,6 +30,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	apiv1 "github.com/stefanprodan/timoni/api/v1alpha1"
@@ -1040,5 +1042,100 @@ bundle: {
 		var exitErr *ExitError
 		g.Expect(errors.As(err, &exitErr)).To(BeTrue())
 		g.Expect(exitErr.Code).To(Equal(2))
+	})
+}
+
+func Test_BundleApply_CustomResourceValidation(t *testing.T) {
+	g := NewWithT(t)
+
+	celURL := fmt.Sprintf("%s/%s", dockerRegistry, rnd("module-cel"))
+	crURL := fmt.Sprintf("%s/%s", dockerRegistry, rnd("module-cel-cr"))
+	for _, module := range []struct {
+		path string
+		url  string
+	}{
+		{path: "testdata/module-cel", url: celURL},
+		{path: "testdata/module-cel-cr", url: crURL},
+	} {
+		_, err := executeCommand(fmt.Sprintf(
+			"mod push %s oci://%s -v 1.0.0 --resolve-symlinks",
+			module.path, module.url,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+	}
+
+	namespace := rnd("validation")
+	bundleName := rnd("validation")
+	bundleData := fmt.Sprintf(`
+bundle: {
+	apiVersion: "v1alpha1"
+	name:       "%[1]s"
+	instances: {
+		operator: {
+			module: {url: "oci://%[2]s", version: "1.0.0"}
+			namespace: "%[4]s"
+			values: customResources: false
+		}
+		app: {
+			module: {url: "oci://%[3]s", version: "1.0.0"}
+			namespace: "%[4]s"
+			values: minReplicas: 5
+		}
+	}
+}
+`, bundleName, celURL, crURL, namespace)
+	bundlePath := filepath.Join(t.TempDir(), "bundle.cue")
+	g.Expect(os.WriteFile(bundlePath, []byte(bundleData), 0o644)).To(Succeed())
+
+	t.Cleanup(func() {
+		_, _ = executeCommand(fmt.Sprintf("delete -n %s app --wait", namespace))
+		_, _ = executeCommand(fmt.Sprintf("delete -n %s operator --wait", namespace))
+	})
+
+	t.Run("stops before applying an invalid custom resource", func(t *testing.T) {
+		g := NewWithT(t)
+		_, stderr, err := executeCommandWithOutErr(fmt.Sprintf(
+			"bundle apply -f %s -p main --wait", bundlePath,
+		))
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("validation failed, 1 invalid custom resource(s)"))
+		g.Expect(stderr).To(ContainSubstring("instance app: Widget/" + namespace + "/app spec: minReplicas must not exceed replicas"))
+
+		crd := &unstructured.Unstructured{}
+		crd.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition",
+		})
+		err = envTestClient.Get(context.Background(), client.ObjectKey{Name: "widgets.testing.timoni.sh"}, crd)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		widget := &unstructured.Unstructured{}
+		widget.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: "testing.timoni.sh", Version: "v1", Kind: "Widget",
+		})
+		err = envTestClient.Get(context.Background(), client.ObjectKey{Name: "app", Namespace: namespace}, widget)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
+
+	t.Run("returns exit code two in diff mode", func(t *testing.T) {
+		g := NewWithT(t)
+		_, err := executeCommand(fmt.Sprintf(
+			"bundle apply -f %s -p main --diff", bundlePath,
+		))
+		g.Expect(err).To(HaveOccurred())
+
+		var exitErr *ExitError
+		g.Expect(errors.As(err, &exitErr)).To(BeTrue())
+		g.Expect(exitErr.Code).To(Equal(2))
+		g.Expect(exitErr.Error()).To(ContainSubstring("validation failed, 1 invalid custom resource(s)"))
+	})
+
+	t.Run("leaves the validation to the API server when disabled", func(t *testing.T) {
+		g := NewWithT(t)
+		_, err := executeCommand(fmt.Sprintf(
+			"bundle apply -f %s -p main --wait --validate=false", bundlePath,
+		))
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).ToNot(ContainSubstring("validation failed, 1 invalid custom resource(s)"))
+		g.Expect(err.Error()).To(ContainSubstring("minReplicas must not exceed replicas"))
 	})
 }

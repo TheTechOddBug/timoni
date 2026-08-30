@@ -181,15 +181,14 @@ func runVetModCmd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("build failed, no objects to apply")
 	}
 
-	// Register the CRD schemas vendored in the imported packages first,
-	// so that the CRDs rendered by the module take precedence for the
-	// same kind versions.
-	imports, err := builder.GetImports()
+	// The CRDs rendered by the module take precedence over the schemas
+	// vendored in the imported packages for the same kind versions.
+	vendoredCRDs, err := builder.GetVendoredCRDs()
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
 	crdValidator := engine.NewCRDValidator()
-	if err := crdValidator.AddPackages(imports); err != nil {
+	if err := crdValidator.AddVendoredCRDs(vendoredCRDs); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 	if err := crdValidator.AddCRDs(objects); err != nil {
