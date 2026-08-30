@@ -229,6 +229,45 @@ func TestBuild(t *testing.T) {
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(err.Error()).To(ContainSubstring("invalid value 19"))
 	})
+
+	t.Run("validates custom resources", func(t *testing.T) {
+		g := NewWithT(t)
+		name := rnd("widget")
+		namespace := rnd("widgets")
+		stdout, stderr, err := executeCommandWithOutErr(fmt.Sprintf(
+			"build -n %s %s testdata/module-cel -p main",
+			namespace, name,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(stdout).To(ContainSubstring("kind: Widget"))
+		g.Expect(stderr).To(BeEmpty())
+	})
+
+	t.Run("fails when a custom resource violates a CEL rule", func(t *testing.T) {
+		g := NewWithT(t)
+		name := rnd("widget")
+		namespace := rnd("widgets")
+		stdout, stderr, err := executeCommandWithOutErr(fmt.Sprintf(
+			"build -n %s %s testdata/module-cel -p main -f testdata/module-cel-values/widget-invalid.cue",
+			namespace, name,
+		))
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("validation failed, 1 invalid custom resource(s)"))
+		g.Expect(stdout).To(BeEmpty())
+		g.Expect(stderr).To(ContainSubstring("spec: minReplicas must not exceed replicas"))
+	})
+
+	t.Run("can disable custom resource validation", func(t *testing.T) {
+		g := NewWithT(t)
+		name := rnd("widget")
+		namespace := rnd("widgets")
+		stdout, _, err := executeCommandWithOutErr(fmt.Sprintf(
+			"build -n %s %s testdata/module-cel -p main -f testdata/module-cel-values/widget-invalid.cue --validate=false",
+			namespace, name,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(stdout).To(ContainSubstring("kind: Widget"))
+	})
 }
 
 func TestBuildRejectsInvalidOutputBeforeInput(t *testing.T) {

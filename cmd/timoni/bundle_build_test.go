@@ -710,3 +710,118 @@ bundle: {
 		g.Expect(out.Len()).To(BeZero())
 	})
 }
+
+func Test_BundleBuild_CustomResourceValidation(t *testing.T) {
+	g := NewWithT(t)
+
+	celURL := fmt.Sprintf("%s/%s", dockerRegistry, rnd("module-cel"))
+	crURL := fmt.Sprintf("%s/%s", dockerRegistry, rnd("module-cel-cr"))
+	for _, module := range []struct {
+		path string
+		url  string
+	}{
+		{path: "testdata/module-cel", url: celURL},
+		{path: "testdata/module-cel-cr", url: crURL},
+	} {
+		_, err := executeCommand(fmt.Sprintf(
+			"mod push %s oci://%s -v 1.0.0 --resolve-symlinks",
+			module.path, module.url,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+	}
+
+	writeBundle := func(instances string) string {
+		path := filepath.Join(t.TempDir(), "bundle.cue")
+		data := fmt.Sprintf(`
+bundle: {
+	apiVersion: "v1alpha1"
+	name:       "validation"
+	instances: {
+%s
+	}
+}
+`, instances)
+		g.Expect(os.WriteFile(path, []byte(data), 0o644)).To(Succeed())
+		return path
+	}
+
+	twoCELInstances := fmt.Sprintf(`
+		valid: {
+			module: {url: "oci://%[1]s", version: "1.0.0"}
+			namespace: "apps"
+		}
+		invalid: {
+			module: {url: "oci://%[1]s", version: "1.0.0"}
+			namespace: "apps"
+			values: minReplicas: 5
+		}`, celURL)
+
+	t.Run("fails before writing stdout for an invalid instance", func(t *testing.T) {
+		g := NewWithT(t)
+		stdout, stderr, err := executeCommandWithOutErr(fmt.Sprintf(
+			"bundle build -f %s -p main", writeBundle(twoCELInstances),
+		))
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("validation failed, 1 invalid custom resource(s)"))
+		g.Expect(stdout).To(BeEmpty())
+		g.Expect(stderr).To(ContainSubstring("instance invalid: Widget/apps/invalid spec: minReplicas must not exceed replicas"))
+	})
+
+	t.Run("fails before writing the output directory", func(t *testing.T) {
+		g := NewWithT(t)
+		outputDir := filepath.Join(t.TempDir(), "manifests")
+		_, _, err := executeCommandWithOutErr(fmt.Sprintf(
+			"bundle build -f %s -p main --output-dir %s", writeBundle(twoCELInstances), outputDir,
+		))
+		g.Expect(err).To(HaveOccurred())
+		_, statErr := os.Stat(outputDir)
+		g.Expect(os.IsNotExist(statErr)).To(BeTrue())
+	})
+
+	crossInstance := fmt.Sprintf(`
+		crd: {
+			module: {url: "oci://%[1]s", version: "1.0.0"}
+			namespace: "apps"
+		}
+		app: {
+			module: {url: "oci://%[2]s", version: "1.0.0"}
+			namespace: "apps"
+			values: minReplicas: 5
+		}`, celURL, crURL)
+
+	t.Run("uses CRDs rendered by another instance", func(t *testing.T) {
+		g := NewWithT(t)
+		stdout, stderr, err := executeCommandWithOutErr(fmt.Sprintf(
+			"bundle build -f %s -p main", writeBundle(crossInstance),
+		))
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(stdout).To(BeEmpty())
+		g.Expect(stderr).To(ContainSubstring("instance app: Widget/apps/app spec: minReplicas must not exceed replicas"))
+	})
+
+	crOnly := fmt.Sprintf(`
+		app: {
+			module: {url: "oci://%[1]s", version: "1.0.0"}
+			namespace: "apps"
+			values: minReplicas: 5
+		}`, crURL)
+
+	t.Run("skips custom resources without a known schema", func(t *testing.T) {
+		g := NewWithT(t)
+		stdout, stderr, err := executeCommandWithOutErr(fmt.Sprintf(
+			"bundle build -f %s -p main", writeBundle(crOnly),
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(stdout).To(ContainSubstring("kind: Widget"))
+		g.Expect(stderr).To(BeEmpty())
+	})
+
+	t.Run("can disable custom resource validation", func(t *testing.T) {
+		g := NewWithT(t)
+		stdout, _, err := executeCommandWithOutErr(fmt.Sprintf(
+			"bundle build -f %s -p main --validate=false", writeBundle(twoCELInstances),
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(stdout).To(ContainSubstring("# Instance: invalid"))
+	})
+}

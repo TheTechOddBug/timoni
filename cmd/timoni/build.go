@@ -32,6 +32,7 @@ import (
 	"cuelang.org/go/cue/format"
 	cuejson "cuelang.org/go/encoding/json"
 	cueyaml "cuelang.org/go/encoding/yaml"
+	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
@@ -40,6 +41,7 @@ import (
 	"github.com/stefanprodan/timoni/internal/engine"
 	"github.com/stefanprodan/timoni/internal/engine/fetcher"
 	"github.com/stefanprodan/timoni/internal/flags"
+	"github.com/stefanprodan/timoni/internal/logger"
 	"github.com/stefanprodan/timoni/internal/mask"
 )
 
@@ -48,6 +50,9 @@ var buildCmd = &cobra.Command{
 	Args:    cobra.MaximumNArgs(2),
 	Aliases: []string{"template"},
 	Short:   "Build an instance from a module and print the resulting Kubernetes resources",
+	Long: `The build command builds an instance from a module and prints the resulting Kubernetes resources.
+
+Custom resources are validated against the CRD schemas vendored in the module and the CRDs rendered by the module. A violation fails the command and nothing is written. Use --validate=false to disable the validation.`,
 	Example: `  # Build an instance from a local module
   timoni build app ./path/to/module --output yaml
 
@@ -78,6 +83,7 @@ type buildFlags struct {
 	valuesFiles []string
 	output      string
 	maskSecrets bool
+	validate    bool
 	creds       flags.Credentials
 }
 
@@ -93,6 +99,8 @@ func init() {
 		"The format in which the Kubernetes objects should be printed, can be 'yaml' or 'json'.")
 	buildCmd.Flags().BoolVar(&buildArgs.maskSecrets, "mask-secrets", false,
 		"Hide the values of Kubernetes Secrets in the printed objects.")
+	buildCmd.Flags().BoolVar(&buildArgs.validate, "validate", true,
+		"Validate the custom resources against their CRD schemas and CEL rules.")
 	buildCmd.Flags().Var(&buildArgs.creds, buildArgs.creds.Type(), buildArgs.creds.Description())
 
 	rootCmd.AddCommand(buildCmd)
@@ -202,6 +210,24 @@ func runBuildCmd(cmd *cobra.Command, args []string) error {
 		objects = append(objects, set.Objects...)
 	}
 
+	if buildArgs.validate {
+		vendoredCRDs, err := builder.GetVendoredCRDs()
+		if err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+		crdValidator := engine.NewCRDValidator()
+		if err := crdValidator.AddVendoredCRDs(vendoredCRDs); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+		if err := crdValidator.AddCRDs(objects); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+		validationErrs := crdValidator.ValidateObjects(cmd.Context(), objects)
+		if invalid := logValidationErrors(LoggerFrom(cmd.Context()), validationErrs, ""); invalid > 0 {
+			return fmt.Errorf("validation failed, %d invalid custom resource(s)", invalid)
+		}
+	}
+
 	if buildArgs.maskSecrets {
 		for i, obj := range objects {
 			objects[i] = mask.SecretData(obj)
@@ -241,6 +267,21 @@ func runBuildCmd(cmd *cobra.Command, args []string) error {
 	default:
 		return fmt.Errorf("unknown --output=%s, can be yaml or json", buildArgs.output)
 	}
+}
+
+// logValidationErrors logs one error line per violation, prefixed with the
+// instance name when set, and returns the number of invalid custom resources.
+func logValidationErrors(log logr.Logger, validationErrs []engine.ValidationError, instance string) int {
+	invalid := make(map[string]struct{})
+	for _, e := range validationErrs {
+		invalid[e.Object] = struct{}{}
+		msg := fmt.Sprintf("%s %s", logger.ColorizeSubject(e.Object), logger.ColorizeError(e.Err))
+		if instance != "" {
+			msg = fmt.Sprintf("instance %s: %s", logger.ColorizeSubject(instance), msg)
+		}
+		log.Error(nil, msg)
+	}
+	return len(invalid)
 }
 
 func convertToCue(cmd *cobra.Command, paths []string) ([][]byte, error) {

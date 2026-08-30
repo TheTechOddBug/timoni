@@ -183,7 +183,7 @@ func executeCommandWithStreams(cmd string, in io.Reader, stdout, stderr io.Write
 func resetCmdArgs() {
 	applyArgs = applyFlags{}
 	fmtArgs = fmtFlags{}
-	buildArgs = buildFlags{output: "yaml"}
+	buildArgs = buildFlags{output: "yaml", validate: true}
 	deleteArgs = deleteFlags{}
 	statusArgs = statusFlags{}
 	inspectModuleArgs = inspectModuleFlags{}
@@ -201,11 +201,11 @@ func resetCmdArgs() {
 	pushModArgs = pushModFlags{}
 	buildModArgs = buildModFlags{format: "oci-archive"}
 	bundleArgs = bundleFlags{}
-	bundleApplyArgs = bundleApplyFlags{}
+	bundleApplyArgs = bundleApplyFlags{validate: true}
 	bundleVetArgs = bundleVetFlags{}
 	bundleUpdateArgs = bundleUpdateFlags{level: engine.UpdateLevelNone}
 	bundleDelArgs = bundleDelFlags{}
-	bundleBuildArgs = bundleBuildFlags{}
+	bundleBuildArgs = bundleBuildFlags{validate: true}
 	vendorCrdArgs = vendorCrdFlags{}
 	vendorK8sArgs = vendorK8sFlags{}
 	pushArtifactArgs = pushArtifactFlags{

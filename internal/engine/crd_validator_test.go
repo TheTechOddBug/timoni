@@ -621,6 +621,69 @@ func TestCRDValidator_AddCRDs(t *testing.T) {
 	g.Expect(v.HasSchema(objects[0].GroupVersionKind())).To(BeTrue())
 }
 
+func TestCRDValidator_AddVendoredCRDs(t *testing.T) {
+	rendered := readTestCRD(t, testCRDWithRules)
+	vendored := readTestCRD(t, strings.ReplaceAll(testCRDWithRules,
+		"minReplicas must not exceed replicas", "vendored rule"))
+	invalid := newTestWidget("v1", map[string]any{
+		"replicas":    int64(1),
+		"minReplicas": int64(5),
+	})
+
+	t.Run("does not replace a rendered schema", func(t *testing.T) {
+		g := NewWithT(t)
+		v := NewCRDValidator()
+		g.Expect(v.AddCRDs([]*unstructured.Unstructured{rendered})).To(Succeed())
+		g.Expect(v.AddVendoredCRDs([]*unstructured.Unstructured{vendored})).To(Succeed())
+
+		errs := v.Validate(context.Background(), invalid)
+		g.Expect(errs).To(HaveLen(1))
+		g.Expect(errs[0].Error()).To(ContainSubstring("minReplicas must not exceed replicas"))
+	})
+
+	t.Run("is replaced by a rendered schema", func(t *testing.T) {
+		g := NewWithT(t)
+		v := NewCRDValidator()
+		g.Expect(v.AddVendoredCRDs([]*unstructured.Unstructured{vendored})).To(Succeed())
+		g.Expect(v.AddCRDs([]*unstructured.Unstructured{rendered})).To(Succeed())
+
+		errs := v.Validate(context.Background(), invalid)
+		g.Expect(errs).To(HaveLen(1))
+		g.Expect(errs[0].Error()).To(ContainSubstring("minReplicas must not exceed replicas"))
+	})
+
+	t.Run("keeps the first vendored schema", func(t *testing.T) {
+		g := NewWithT(t)
+		v := NewCRDValidator()
+		g.Expect(v.AddVendoredCRDs([]*unstructured.Unstructured{vendored})).To(Succeed())
+		g.Expect(v.AddVendoredCRDs([]*unstructured.Unstructured{rendered})).To(Succeed())
+
+		errs := v.Validate(context.Background(), invalid)
+		g.Expect(errs).To(HaveLen(1))
+		g.Expect(errs[0].Error()).To(ContainSubstring("vendored rule"))
+	})
+}
+
+func TestCRDValidator_ValidateObjects(t *testing.T) {
+	g := NewWithT(t)
+	v := NewCRDValidator()
+	g.Expect(v.AddCRD(readTestCRD(t, testCRDWithRules))).To(Succeed())
+
+	unknown := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]any{"name": "test", "namespace": "default"},
+	}}
+	invalid := newTestWidget("v1", map[string]any{
+		"replicas":    int64(1),
+		"minReplicas": int64(5),
+	})
+
+	errs := v.ValidateObjects(context.Background(), []*unstructured.Unstructured{unknown, invalid})
+	g.Expect(errs).To(HaveLen(1))
+	g.Expect(errs[0]).To(MatchError("Widget/default/test spec: minReplicas must not exceed replicas"))
+}
+
 // writeTestModule writes a module importing the given CUE packages,
 // each placed under cue.mod at the given relative directory.
 func writeTestModule(t *testing.T, packages map[string]string) string {
@@ -714,7 +777,7 @@ func TestImporter_EmbeddedCRD(t *testing.T) {
 	})
 }
 
-func TestCRDValidator_AddPackages(t *testing.T) {
+func TestModuleBuilder_GetVendoredCRDs(t *testing.T) {
 	g := NewWithT(t)
 	widgetV1 := schema.GroupVersionKind{Group: "testing.timoni.sh", Version: "v1", Kind: "Widget"}
 	widgetV2 := schema.GroupVersionKind{Group: "testing.timoni.sh", Version: "v2", Kind: "Widget"}
@@ -733,12 +796,12 @@ func TestCRDValidator_AddPackages(t *testing.T) {
 		_, err := builder.Build()
 		g.Expect(err).ToNot(HaveOccurred())
 
-		imports, err := builder.GetImports()
+		vendoredCRDs, err := builder.GetVendoredCRDs()
 		g.Expect(err).ToNot(HaveOccurred())
-		g.Expect(imports).To(HaveLen(2))
+		g.Expect(vendoredCRDs).To(HaveLen(2))
 
 		v := NewCRDValidator()
-		g.Expect(v.AddPackages(imports)).To(Succeed())
+		g.Expect(v.AddVendoredCRDs(vendoredCRDs)).To(Succeed())
 		g.Expect(v.HasSchema(widgetV1)).To(BeTrue())
 		g.Expect(v.HasSchema(widgetV2)).To(BeTrue())
 
@@ -776,11 +839,12 @@ func TestCRDValidator_AddPackages(t *testing.T) {
 		_, err := builder.Build()
 		g.Expect(err).ToNot(HaveOccurred())
 
-		imports, err := builder.GetImports()
+		vendoredCRDs, err := builder.GetVendoredCRDs()
 		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(vendoredCRDs).To(BeEmpty())
 
 		v := NewCRDValidator()
-		g.Expect(v.AddPackages(imports)).To(Succeed())
+		g.Expect(v.AddVendoredCRDs(vendoredCRDs)).To(Succeed())
 		g.Expect(v.HasSchema(widgetV1)).To(BeFalse())
 	})
 
@@ -793,11 +857,7 @@ func TestCRDValidator_AddPackages(t *testing.T) {
 		_, err := builder.Build()
 		g.Expect(err).ToNot(HaveOccurred())
 
-		imports, err := builder.GetImports()
-		g.Expect(err).ToNot(HaveOccurred())
-
-		v := NewCRDValidator()
-		err = v.AddPackages(imports)
+		_, err = builder.GetVendoredCRDs()
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(err.Error()).To(ContainSubstring("invalid _crd field in package testing.timoni.sh/widget/v1"))
 	})
@@ -835,19 +895,18 @@ import p "testing.timoni.sh/widget/v1"
 		_, err := builder.Build()
 		g.Expect(err).ToNot(HaveOccurred())
 
-		imports, err := builder.GetImports()
+		vendoredCRDs, err := builder.GetVendoredCRDs()
 		g.Expect(err).ToNot(HaveOccurred())
-		g.Expect(imports).To(HaveLen(1))
-		g.Expect(imports[0].Path).To(Equal("testing.timoni.sh/widget/v1"))
+		g.Expect(vendoredCRDs).To(HaveLen(1))
 
 		v := NewCRDValidator()
-		g.Expect(v.AddPackages(imports)).To(Succeed())
+		g.Expect(v.AddVendoredCRDs(vendoredCRDs)).To(Succeed())
 		g.Expect(v.HasSchema(widgetV1)).To(BeTrue())
 	})
 
 	t.Run("requires a built module", func(t *testing.T) {
 		builder := NewModuleBuilder(cuecontext.New(), "test", "default", t.TempDir(), defaultPackage)
-		_, err := builder.GetImports()
+		_, err := builder.GetVendoredCRDs()
 		g.Expect(err).To(MatchError("module not built"))
 	})
 }

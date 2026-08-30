@@ -201,3 +201,9 @@ vetting with debug values
 HTTPRoute/default/app spec.endpoints: spec.rules[0].filters[0]: filter.requestRedirect must be specified for RequestRedirect filter.type
 validation failed, 1 invalid custom resource(s)
 ```
+
+The same checks run in `timoni build`, `timoni bundle build` and `timoni bundle apply`,
+where only the violations are reported and `--validate=false` disables the validation.
+In a bundle, the custom resources of an instance are also validated against the
+CRDs rendered by the other instances, with `bundle apply` by the instances applied
+before it, see [bundle validation](/bundle#validation).
