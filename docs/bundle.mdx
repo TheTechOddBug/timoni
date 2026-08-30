@@ -560,16 +560,27 @@ timoni bundle vet -f bundle.cue -f extras.cue
 ```
 
 If the validation passes, Timoni will list all the instances found in the computed bundle.
+The command runs without cluster access unless the selected Runtime declares `values`
+that read from Kubernetes resources.
 
-When `--print-value` is specified, Timoni will write the Bundle computed value to stdout.
-
-Example:
+With `--offline`, Timoni does not connect to the clusters and takes the Runtime values
+from the environment variables with the same names.
 
 ```shell
-timoni bundle vet -f bundle.cue --runtime-from-env --print-value
+export DB_PASSWORD=dummy
+timoni bundle vet -f bundle.cue -r runtime.cue --offline --print-value
 ```
 
-Printing the computed value is particular useful when debugging runtime attributes.
+When a value declared by the Runtime is missing from the environment, Timoni reports it
+and uses the Bundle default. The validation fails if the value has no default.
+The clusters declared in the Runtime are still evaluated one by one, with
+`TIMONI_CLUSTER_NAME` and `TIMONI_CLUSTER_GROUP` set for each of them.
+
+When `--print-value` is specified, Timoni will write the Bundle computed value to stdout.
+Printing the computed value is particularly useful when debugging runtime attributes.
+
+Note that the vet command does not fetch the modules, so the instance values are
+not validated against the module schemas. Use `timoni bundle build` for that.
 
 ### Update module versions
 

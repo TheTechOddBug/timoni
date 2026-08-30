@@ -39,6 +39,15 @@ var bundleVetCmd = &cobra.Command{
 	Short:   "Validate a bundle definition",
 	Long: `The bundle vet command validates that a bundle definition conforms
 with Timoni's schema and optionally prints the computed value.
+
+The clusters are contacted only when the runtime reads values from
+Kubernetes resources. With --offline, the runtime values come from the
+environment variables with the same names; a missing value is reported
+and the bundle default is used, or the validation fails when there is
+no default.
+
+The instance values are not validated against the module schemas,
+use the bundle build command for that.
 `,
 	Example: `  # Validate a bundle and list its instances
   timoni bundle vet -f bundle.cue
@@ -54,6 +63,14 @@ with Timoni's schema and optionally prints the computed value.
   -f bundle.cue \
   -r runtime.cue \
   --print-value
+
+  # Validate a bundle without cluster access,
+  # with the runtime values taken from the environment
+  export DB_PASSWORD=dummy
+  timoni bundle vet \
+  -f bundle.cue \
+  -r runtime.cue \
+  --offline
 `,
 	Args: cobra.NoArgs,
 	RunE: runBundleVetCmd,
@@ -63,6 +80,7 @@ type bundleVetFlags struct {
 	pkg        flags.Package
 	files      []string
 	printValue bool
+	offline    bool
 }
 
 var bundleVetArgs bundleVetFlags
@@ -73,9 +91,12 @@ func init() {
 		"The local path to bundle.cue files.")
 	bundleVetCmd.Flags().BoolVar(&bundleVetArgs.printValue, "print-value", false,
 		"Print the computed value of the bundle.")
+	bundleVetCmd.Flags().BoolVar(&bundleVetArgs.offline, "offline", false,
+		"Validate without cluster access, taking the runtime values from the environment.")
 	bundleCmd.AddCommand(bundleVetCmd)
 }
 
+// runBundleVetCmd validates a bundle definition with runtime values from the environment or clusters.
 func runBundleVetCmd(cmd *cobra.Command, args []string) error {
 	log := LoggerFrom(cmd.Context())
 	files := bundleVetArgs.files
@@ -108,13 +129,23 @@ func runBundleVetCmd(cmd *cobra.Command, args []string) error {
 
 	runtimeValues := make(map[string]string)
 
-	if bundleArgs.runtimeFromEnv {
+	if bundleArgs.runtimeFromEnv || bundleVetArgs.offline {
 		maps.Copy(runtimeValues, engine.GetEnv())
 	}
 
 	rt, err := buildRuntime(bundleArgs.runtimeFiles, bundleArgs.workdir)
 	if err != nil {
 		return err
+	}
+
+	if bundleVetArgs.offline {
+		for _, ref := range rt.Refs {
+			for key := range ref.Expressions {
+				if _, found := runtimeValues[key]; !found {
+					log.Info(fmt.Sprintf("runtime value %s not found in environment, using the bundle default", key))
+				}
+			}
+		}
 	}
 
 	clusters := rt.SelectClusters(bundleArgs.runtimeCluster, bundleArgs.runtimeClusterGroup)
@@ -134,16 +165,18 @@ func runBundleVetCmd(cmd *cobra.Command, args []string) error {
 		maps.Copy(clusterValues, runtimeValues)
 
 		// add values from cluster
-		rm, err := runtime.NewResourceManager(kubeconfigArgs)
-		if err != nil {
-			return err
+		if len(rt.Refs) > 0 && !bundleVetArgs.offline {
+			rm, err := runtime.NewResourceManager(kubeconfigArgs)
+			if err != nil {
+				return err
+			}
+			reader := runtime.NewResourceReader(rm)
+			rv, err := reader.Read(kctx, rt.Refs)
+			if err != nil {
+				return err
+			}
+			maps.Copy(clusterValues, rv)
 		}
-		reader := runtime.NewResourceReader(rm)
-		rv, err := reader.Read(kctx, rt.Refs)
-		if err != nil {
-			return err
-		}
-		maps.Copy(clusterValues, rv)
 
 		// add cluster info
 		maps.Copy(clusterValues, cluster.NameGroupValues())

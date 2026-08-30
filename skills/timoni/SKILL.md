@@ -66,6 +66,7 @@ below.
 | Task | Command |
 |------|---------|
 | Validate | `timoni bundle vet -f bundle.cue` |
+| Validate without a cluster | `timoni bundle vet -f bundle.cue -r runtime.cue --offline` |
 | Validate and print the computed bundle | `timoni bundle vet -f bundle.cue --print-value` |
 | Preview | `timoni bundle apply -f bundle.cue --diff` |
 | Apply | `timoni bundle apply -f bundle.cue [-f bundle_secrets.cue]` |
@@ -373,7 +374,7 @@ regardless. Everything else prints plaintext: `bundle vet --print-value`,
 1. Pin the version: `timoni mod list oci://<repo>`; use a digest where tags are mutable.
 2. Read the docs: `timoni mod show readme oci://<repo> -v <version>`, then
    the schema: `timoni mod show config oci://<repo> -v <version>`.
-3. Validate offline: `timoni build ...` or `timoni bundle vet -f bundle.cue`.
+3. Validate offline: `timoni build ...` or `timoni bundle vet -f bundle.cue --offline`.
 4. Preview: `--diff`, review pruned and recreated objects.
 5. Apply, then `timoni status` / `timoni bundle status`.
 6. Confirm merged values with `inspect values` only where the output is not logged.

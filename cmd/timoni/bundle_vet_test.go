@@ -17,12 +17,17 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func Test_BundleVet(t *testing.T) {
@@ -197,6 +202,197 @@ bundle: {
 			g.Expect(err.Error()).To(MatchRegexp(tt.matchErr))
 		})
 	}
+}
+
+func Test_BundleVet_Offline(t *testing.T) {
+	runtimeValueName := strings.ToUpper(strings.ReplaceAll(rnd("bundle-vet"), "-", "_"))
+	secretName := rnd("bundle-vet")
+	behaviorDir := t.TempDir()
+
+	defaultBundle := `
+bundle: {
+	apiVersion: "v1alpha1"
+	name:       "offline-test"
+	instances: app: {
+		module: {
+			url:     "oci://docker.io/test"
+			version: "latest"
+		}
+		namespace: "default"
+		values: {}
+	}
+}
+`
+	defaultBundlePath := filepath.Join(behaviorDir, "default-bundle.cue")
+	g := NewWithT(t)
+	g.Expect(os.WriteFile(defaultBundlePath, []byte(defaultBundle), 0644)).To(Succeed())
+
+	runtimeBundle := fmt.Sprintf(`
+bundle: {
+	_cluster:      "default" @timoni(runtime:string:TIMONI_CLUSTER_NAME)
+	_runtimeValue: *"bundle-default" | string @timoni(runtime:string:%s)
+
+	apiVersion: "v1alpha1"
+	name:       "offline-test"
+	instances: app: {
+		module: {
+			url:     "oci://docker.io/test"
+			version: "latest"
+		}
+		namespace: "default"
+		values: {
+			cluster:      _cluster
+			runtimeValue: _runtimeValue
+		}
+	}
+}
+`, runtimeValueName)
+	runtimeBundlePath := filepath.Join(behaviorDir, "runtime-bundle.cue")
+	g.Expect(os.WriteFile(runtimeBundlePath, []byte(runtimeBundle), 0644)).To(Succeed())
+
+	runtimeNoRefs := `
+runtime: {
+	apiVersion: "v1alpha1"
+	name:       "offline-test"
+	clusters: "offline-cluster": {
+		group:       "testing"
+		kubeContext: "missing"
+	}
+}
+`
+	runtimeNoRefsPath := filepath.Join(behaviorDir, "runtime-no-refs.cue")
+	g.Expect(os.WriteFile(runtimeNoRefsPath, []byte(runtimeNoRefs), 0644)).To(Succeed())
+
+	runtimeWithRefs := fmt.Sprintf(`
+runtime: {
+	apiVersion: "v1alpha1"
+	name:       "offline-test"
+	clusters: "envtest": {
+		group:       "testing"
+		kubeContext: "envtest"
+	}
+	values: [
+		{
+			query: "k8s:v1:Secret:kube-system:%s"
+			for: {
+				%q: "obj.data.value"
+			}
+		},
+	]
+}
+`, secretName, runtimeValueName)
+	runtimeWithRefsPath := filepath.Join(behaviorDir, "runtime-with-refs.cue")
+	g.Expect(os.WriteFile(runtimeWithRefsPath, []byte(runtimeWithRefs), 0644)).To(Succeed())
+
+	t.Run("vets the default runtime without a kubeconfig", func(t *testing.T) {
+		g := NewWithT(t)
+		useMissingKubeconfig(t)
+
+		output, err := executeCommand(fmt.Sprintf("bundle vet -f %s", defaultBundlePath))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(output).To(ContainSubstring("instance is valid"))
+		g.Expect(output).To(ContainSubstring("i:app"))
+	})
+
+	t.Run("vets runtime clusters without refs or a kubeconfig", func(t *testing.T) {
+		g := NewWithT(t)
+		useMissingKubeconfig(t)
+
+		output, err := executeCommand(fmt.Sprintf(
+			"bundle vet -f %s -r %s -p main --print-value",
+			runtimeBundlePath, runtimeNoRefsPath,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(output).To(ContainSubstring(`"offline-cluster": bundle`))
+		g.Expect(output).To(ContainSubstring("cluster:"))
+		g.Expect(output).To(ContainSubstring(`"offline-cluster"`))
+	})
+
+	t.Run("requires a kubeconfig for runtime refs", func(t *testing.T) {
+		g := NewWithT(t)
+		useMissingKubeconfig(t)
+
+		_, err := executeCommand(fmt.Sprintf(
+			"bundle vet -f %s -r %s -p main --print-value",
+			runtimeBundlePath, runtimeWithRefsPath,
+		))
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("loading kubeconfig failed"))
+	})
+
+	t.Run("offline injects runtime refs from the environment", func(t *testing.T) {
+		g := NewWithT(t)
+		useMissingKubeconfig(t)
+		t.Setenv(runtimeValueName, "environment-value")
+
+		output, err := executeCommand(fmt.Sprintf(
+			"bundle vet -f %s -r %s -p main --offline --print-value",
+			runtimeBundlePath, runtimeWithRefsPath,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(output).To(ContainSubstring(`runtimeValue: "environment-value"`))
+	})
+
+	t.Run("offline logs missing runtime refs and uses bundle defaults", func(t *testing.T) {
+		g := NewWithT(t)
+		useMissingKubeconfig(t)
+		_, found := os.LookupEnv(runtimeValueName)
+		g.Expect(found).To(BeFalse())
+
+		stdout, stderr, err := executeCommandWithOutErr(fmt.Sprintf(
+			"bundle vet -f %s -r %s -p main --offline --print-value",
+			runtimeBundlePath, runtimeWithRefsPath,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(stdout).To(ContainSubstring(`runtimeValue: *"bundle-default" | string`))
+		expectedLog := fmt.Sprintf("runtime value %s not found in environment, using the bundle default", runtimeValueName)
+		g.Expect(stderr).To(ContainSubstring(expectedLog))
+	})
+
+	t.Run("cluster values override environment values", func(t *testing.T) {
+		g := NewWithT(t)
+		t.Setenv(runtimeValueName, "environment-value")
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: "kube-system",
+			},
+			StringData: map[string]string{"value": "cluster-value"},
+		}
+		g.Expect(envTestClient.Create(context.Background(), secret, &client.CreateOptions{
+			FieldManager: "timoni",
+		})).To(Succeed())
+		t.Cleanup(func() {
+			_ = envTestClient.Delete(context.Background(), secret)
+		})
+
+		output, err := executeCommand(fmt.Sprintf(
+			"bundle vet -f %s -r %s -p main --runtime-from-env --print-value",
+			runtimeBundlePath, runtimeWithRefsPath,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(output).To(ContainSubstring(`runtimeValue: "cluster-value"`))
+		g.Expect(output).ToNot(ContainSubstring("environment-value"))
+
+		output, err = executeCommand(fmt.Sprintf(
+			"bundle vet -f %s -r %s -p main --offline --print-value",
+			runtimeBundlePath, runtimeWithRefsPath,
+		))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(output).To(ContainSubstring(`runtimeValue: "environment-value"`))
+		g.Expect(output).ToNot(ContainSubstring("cluster-value"))
+	})
+}
+
+// useMissingKubeconfig points commands at a nonexistent kubeconfig for the duration of a test.
+func useMissingKubeconfig(t *testing.T) {
+	t.Helper()
+	original := kubeconfigArgs.KubeConfig
+	missing := filepath.Join(t.TempDir(), "missing-kubeconfig")
+	kubeconfigArgs.KubeConfig = &missing
+	t.Cleanup(func() {
+		kubeconfigArgs.KubeConfig = original
+	})
 }
 
 func Test_BundleVet_PrintValue(t *testing.T) {
