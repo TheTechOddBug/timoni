@@ -341,7 +341,7 @@ timoni: {
 }
 `)
 	g.Expect(err).ToNot(HaveOccurred())
-	g.Expect(checks).To(HaveLen(18))
+	g.Expect(checks).To(HaveLen(19))
 
 	byKind := make(map[string]*HealthCheck, len(checks))
 	for _, hc := range checks {
@@ -351,7 +351,7 @@ timoni: {
 		g.Expect(byKind).To(HaveKey(kind))
 		g.Expect(byKind[kind].GroupKind.Group).To(BeEquivalentTo("gateway.networking.k8s.io"))
 	}
-	for _, kind := range []string{"XListenerSet", "XBackendTrafficPolicy", "XMesh"} {
+	for _, kind := range []string{"XListenerSet", "XBackendTrafficPolicy", "XBackend", "XMesh"} {
 		g.Expect(byKind).To(HaveKey(kind))
 		g.Expect(byKind[kind].GroupKind.Group).To(BeEquivalentTo("gateway.networking.x-k8s.io"))
 	}
@@ -540,6 +540,79 @@ timoni: {
 			expect: HealthStatusInProgress,
 		},
 		{
+			// The live object carries the full route spec and the
+			// controller name in the status: the #object schema must
+			// stay open beyond the fields the check evaluates.
+			name: "route with hostnames and rules is current",
+			kind: "HTTPRoute",
+			object: map[string]any{
+				"apiVersion": "gateway.networking.k8s.io/v1",
+				"kind":       "HTTPRoute",
+				"metadata": map[string]any{
+					"name":       "app",
+					"namespace":  "apps",
+					"generation": int64(2),
+					"labels":     map[string]any{"app.kubernetes.io/name": "app"},
+				},
+				"spec": map[string]any{
+					"parentRefs": []any{ref("gw-a")},
+					"hostnames":  []any{"app.example.com"},
+					"rules": []any{map[string]any{
+						"matches":     []any{map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/"}}},
+						"backendRefs": []any{map[string]any{"name": "app", "port": int64(80)}},
+					}},
+				},
+				"status": map[string]any{
+					"parents": []any{
+						map[string]any{
+							"parentRef":      ref("gw-a"),
+							"controllerName": "gateway.envoyproxy.io/gatewayclass-controller",
+							"conditions": []any{
+								condition("Accepted", "True", 2),
+								condition("ResolvedRefs", "True", 2),
+							},
+						},
+					},
+				},
+			},
+			expect: HealthStatusCurrent,
+		},
+		{
+			// Controllers may leave out of the reported ref the fields
+			// they consider implied, e.g. the namespace of a parent in
+			// the route namespace; the entry still matches the spec ref.
+			name: "route parent reported without the implied fields is current",
+			kind: "HTTPRoute",
+			object: map[string]any{
+				"metadata": map[string]any{"namespace": "apps", "generation": int64(2)},
+				"spec": map[string]any{"parentRefs": []any{
+					map[string]any{"name": "gw-a", "namespace": "apps", "group": "gateway.networking.k8s.io", "kind": "Gateway"},
+				}},
+				"status": map[string]any{
+					"parents": []any{
+						parent(map[string]any{"name": "gw-a"}, condition("Accepted", "True", 2)),
+					},
+				},
+			},
+			expect: HealthStatusCurrent,
+		},
+		{
+			name: "route parent reported with a different namespace is in progress",
+			kind: "HTTPRoute",
+			object: map[string]any{
+				"metadata": map[string]any{"namespace": "apps", "generation": int64(2)},
+				"spec": map[string]any{"parentRefs": []any{
+					map[string]any{"name": "gw-a", "namespace": "apps"},
+				}},
+				"status": map[string]any{
+					"parents": []any{
+						parent(map[string]any{"name": "gw-a", "namespace": "infra"}, condition("Accepted", "True", 2)),
+					},
+				},
+			},
+			expect: HealthStatusInProgress,
+		},
+		{
 			name: "programmed listener set is current",
 			kind: "ListenerSet",
 			object: map[string]any{
@@ -612,6 +685,97 @@ timoni: {
 				},
 			},
 			expect: HealthStatusInProgress,
+		},
+		{
+			name: "policy with the full spec and ancestor status is current",
+			kind: "BackendTLSPolicy",
+			object: map[string]any{
+				"metadata": map[string]any{"name": "tls", "namespace": "apps", "generation": int64(1)},
+				"spec": map[string]any{
+					"targetRefs": []any{map[string]any{"group": "", "kind": "Service", "name": "app"}},
+					"validation": map[string]any{"hostname": "app.example.com", "wellKnownCACertificates": "System"},
+				},
+				"status": map[string]any{
+					"ancestors": []any{map[string]any{
+						"ancestorRef":    ref("gw-a"),
+						"controllerName": "gateway.envoyproxy.io/gatewayclass-controller",
+						"conditions":     []any{condition("Accepted", "True", 1), condition("ResolvedRefs", "True", 1)},
+					}},
+				},
+			},
+			expect: HealthStatusCurrent,
+		},
+		{
+			name: "policy with no ancestors is in progress",
+			kind: "XBackendTrafficPolicy",
+			object: map[string]any{
+				"metadata": map[string]any{"generation": int64(1)},
+				"status":   map[string]any{"ancestors": []any{}},
+			},
+			expect: HealthStatusInProgress,
+		},
+		{
+			name: "backend accepted by all parents is current",
+			kind: "XBackend",
+			object: map[string]any{
+				"metadata": map[string]any{"name": "external", "namespace": "apps", "generation": int64(1)},
+				"spec":     map[string]any{"type": "External", "externalHostname": "api.example.com", "port": int64(443), "protocol": "HTTPS"},
+				"status": map[string]any{
+					"parents": []any{
+						map[string]any{
+							"parentRef":      ref("gw-a"),
+							"controllerName": "gateway.envoyproxy.io/gatewayclass-controller",
+							"conditions":     []any{condition("Accepted", "True", 1)},
+						},
+						parent(ref("gw-b"), condition("Accepted", "True", 1)),
+					},
+				},
+			},
+			expect: HealthStatusCurrent,
+		},
+		{
+			name: "backend rejected by one parent is in progress",
+			kind: "XBackend",
+			object: map[string]any{
+				"metadata": map[string]any{"generation": int64(1)},
+				"status": map[string]any{
+					"parents": []any{
+						parent(ref("gw-a"), condition("Accepted", "True", 1)),
+						parent(ref("gw-b"), condition("Accepted", "False", 1)),
+					},
+				},
+			},
+			expect: HealthStatusInProgress,
+		},
+		{
+			name: "backend with stale accepted condition is in progress",
+			kind: "XBackend",
+			object: map[string]any{
+				"metadata": map[string]any{"generation": int64(2)},
+				"status": map[string]any{
+					"parents": []any{
+						parent(ref("gw-a"), condition("Accepted", "True", 1)),
+					},
+				},
+			},
+			expect: HealthStatusInProgress,
+		},
+		{
+			name: "backend referenced by no route is current",
+			kind: "XBackend",
+			object: map[string]any{
+				"metadata": map[string]any{"generation": int64(1)},
+				"status":   map[string]any{"parents": []any{}},
+			},
+			expect: HealthStatusCurrent,
+		},
+		{
+			name: "backend with no status is current",
+			kind: "XBackend",
+			object: map[string]any{
+				"metadata": map[string]any{"generation": int64(1)},
+			},
+			expect: HealthStatusCurrent,
 		},
 		{
 			name: "v1beta1 ready cluster is current",
