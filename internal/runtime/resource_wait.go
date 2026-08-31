@@ -105,7 +105,24 @@ func healthCheckResult(hc *engine.HealthCheck, u *unstructured.Unstructured) (*s
 
 	res, err := hc.Evaluate(u.UnstructuredContent())
 	if err != nil {
-		return nil, err
+		// The evaluation is only attempted on objects read from the
+		// cluster, so an error means the health check definition is at
+		// odds with the live object: the #object schema rejects it or an
+		// expression cannot be computed from it. Polling again cannot
+		// change that, so the resource is reported as failed to end the
+		// wait right away instead of running out the timeout as Unknown.
+		return &status.Result{
+			Status:  status.FailedStatus,
+			Message: err.Error(),
+			Conditions: []status.Condition{
+				{
+					Type:    status.ConditionStalled,
+					Status:  corev1.ConditionTrue,
+					Reason:  "HealthCheckError",
+					Message: err.Error(),
+				},
+			},
+		}, nil
 	}
 
 	switch res {
